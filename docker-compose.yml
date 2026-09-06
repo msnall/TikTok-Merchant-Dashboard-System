@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: content_system
+      POSTGRES_USER: content
+      POSTGRES_PASSWORD: content
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://content:content@db:5432/content_system
+      STORAGE_DIR: /app/storage
+    ports: ["8000:8000"]
+    volumes: ["./storage:/app/storage"]
+    depends_on: [db]
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports: ["5173:5173"]
+    volumes: ["./frontend:/app"]
+    depends_on: [backend]
+volumes:
+  pgdata:
+

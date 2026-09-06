@@ -1,0 +1,3 @@
+import { createApp } from 'vue'; import { createRouter, createWebHistory } from 'vue-router'; import ElementPlus from 'element-plus'; import 'element-plus/dist/index.css'; import './style.css'; import App from './App.vue'; import Dashboard from './views/Dashboard.vue'; import ResourceList from './views/ResourceList.vue';
+const routes = [{path:'/',component:Dashboard},{path:'/assistant',component:ResourceList,props:{resource:'assistant'}},{path:'/:resource(assets|scripts|templates|videos|mix-projects)',component:ResourceList,props:true}];
+createApp(App).use(createRouter({history:createWebHistory(),routes})).use(ElementPlus).mount('#app');
