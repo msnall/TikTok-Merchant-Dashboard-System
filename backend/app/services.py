@@ -36,4 +36,15 @@ def recommendations(db: Session, market_id=None, product_id=None, content_type=N
             ranked.append({"item": item, "score": score, "reasons": reasons})
         ranked.sort(key=lambda x: x["score"], reverse=True)
         result[key] = ranked[:10]
+    plans = []
+    scripts = result["scripts"][:3]
+    templates = result["templates"][:3]
+    assets = result["assets"][:3]
+    for index, (script, template) in enumerate(zip(scripts, templates)):
+        chosen_assets = assets[index:index + 1] or assets[:1]
+        if not chosen_assets: continue
+        plan_score = round((script["score"] + template["score"] + sum(item["score"] for item in chosen_assets)) / (2 + len(chosen_assets)), 3)
+        plan_reasons = list(dict.fromkeys(script["reasons"] + template["reasons"] + [reason for item in chosen_assets for reason in item["reasons"]]))
+        plans.append({"id": f"generated-{index + 1}", "score": plan_score, "script_id": script["item"].id, "template_id": template["item"].id, "asset_ids": [item["item"].id for item in chosen_assets], "target_duration": duration, "reasons": plan_reasons})
+    result["mix_plans"] = plans
     return result

@@ -119,7 +119,7 @@ class MixProjectAsset(Base):
     __tablename__ = "mix_project_assets"
     id: Mapped[int] = mapped_column(primary_key=True)
     mix_project_id: Mapped[int] = mapped_column(ForeignKey("mix_projects.id", ondelete="CASCADE"))
-    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"))
+    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"))
     order_index: Mapped[int] = mapped_column(Integer, default=0)
     start_second: Mapped[float | None] = mapped_column(Float)
     end_second: Mapped[float | None] = mapped_column(Float)

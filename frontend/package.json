@@ -1,1 +1,1 @@
-{"scripts":{"dev":"vite","build":"vite build"},"dependencies":{"@vitejs/plugin-vue":"latest","axios":"latest","element-plus":"latest","vue":"latest","vue-router":"latest","typescript":"latest","vite":"latest"},"devDependencies":{}}
+{"scripts":{"dev":"vite","build":"vite build"},"dependencies":{"@vitejs/plugin-vue":"6.0.8","axios":"1.20.0","element-plus":"2.14.5","vue":"3.5.42","vue-router":"5.3.1","typescript":"7.0.2","vite":"8.2.2"},"devDependencies":{}}

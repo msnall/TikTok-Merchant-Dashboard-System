@@ -7,6 +7,11 @@ services:
       POSTGRES_PASSWORD: content
     ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U content -d content_system"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
   backend:
     build: ./backend
     environment:
@@ -14,7 +19,9 @@ services:
       STORAGE_DIR: /app/storage
     ports: ["8000:8000"]
     volumes: ["./storage:/app/storage"]
-    depends_on: [db]
+    depends_on:
+      db:
+        condition: service_healthy
   frontend:
     image: node:22-alpine
     working_dir: /app
@@ -24,4 +31,3 @@ services:
     depends_on: [backend]
 volumes:
   pgdata:
-
