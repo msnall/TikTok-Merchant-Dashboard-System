@@ -91,6 +91,8 @@ def test_mix_project_timeline_and_video_lineage(clean_database):
     video = client.post("/api/videos", json={"title": "Sunscreen cut", "mix_project_id": project["id"], **common}).json()
     version = client.post(f"/api/videos/{video['id']}/versions", json={"change_note": "initial", "snapshot": {"project_id": project["id"]}}).json()
     assert version["version"] == 1 and version["is_latest"] is True
+    assert client.get("/api/videos", params={"mix_project_id": project["id"]}).json()[0]["id"] == video["id"]
+    assert client.get(f"/api/videos/{video['id']}/lineage").json()["mix_project"]["id"] == project["id"]
 
 
 def test_asset_delete_cascades_mix_relation(clean_database):
@@ -100,6 +102,15 @@ def test_asset_delete_cascades_mix_relation(clean_database):
     assert relation.status_code == 201
     assert client.delete(f"/api/assets/{asset['id']}").status_code == 204
     assert client.get("/api/mix-project-assets").json() == []
+
+
+def test_asset_lineage_endpoint(clean_database):
+    asset = client.post("/api/assets", json={"name": "Lineage clip", **clean_database}).json()
+    project = client.post("/api/mix-projects", json={"name": "Lineage project", **clean_database}).json()
+    client.post("/api/mix-project-assets", json={"mix_project_id": project["id"], "asset_id": asset["id"]})
+    video = client.post("/api/videos", json={"title": "Lineage video", "mix_project_id": project["id"]}).json()
+    result = client.get(f"/api/assets/{asset['id']}/lineage")
+    assert result.status_code == 200 and result.json()["mix_projects"][0]["videos"][0]["id"] == video["id"]
 
 
 def test_hybrid_search_and_version_lineage(clean_database):
