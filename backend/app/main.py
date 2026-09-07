@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .db import Base, engine, get_db
 from .config import settings
 from .models import Market, Product, Asset, Script, ContentTemplate, MixProject, MixProjectAsset, VideoWork, Tag, AssetFile, ContentVersion
-from .schemas import RecommendationRequest, MarketCreate, ProductCreate, AssetCreate, ScriptCreate, TemplateCreate, MixProjectCreate, MixProjectAssetCreate, VideoWorkCreate, TagCreate
+from .schemas import RecommendationRequest, AdoptRecommendationRequest, MarketCreate, ProductCreate, AssetCreate, ScriptCreate, TemplateCreate, MixProjectCreate, MixProjectAssetCreate, VideoWorkCreate, TagCreate
 from .services import recommendations
 from .semantic import embed, item_text, cosine, stored_embedding
 import json
@@ -173,8 +173,27 @@ def recommend(payload: RecommendationRequest, db: Session = Depends(get_db)):
         if key == "mix_plans":
             response[key] = rows
         else:
-            response[key] = [{"score": row["score"], "reasons": row["reasons"], **serialize(row["item"])} for row in rows]
+            response[key] = [{"score": row["score"], "reasons": row["reasons"], "score_breakdown": row.get("score_breakdown", {}), **serialize(row["item"])} for row in rows]
     return response
+
+@app.post("/api/assistant/adopt", status_code=201)
+def adopt_recommendation(payload: AdoptRecommendationRequest, db: Session = Depends(get_db)):
+    ranked = recommendations(db, **payload.model_dump(exclude={"plan_index", "name"}))
+    plans = ranked.get("mix_plans", [])
+    if payload.plan_index >= len(plans):
+        raise HTTPException(404, "推荐方案不存在，请重新获取推荐")
+    plan = plans[payload.plan_index]
+    project = MixProject(name=payload.name or f"推荐混剪方案 {plan['id']}", market_id=payload.market_id,
+                         product_id=payload.product_id, script_id=plan["script_id"], template_id=plan["template_id"],
+                         target_duration=payload.duration, status="draft", notes="由创作助手推荐采用")
+    db.add(project); db.flush()
+    for index, asset_id in enumerate(plan["asset_ids"]):
+        start = index * 3
+        end = min(start + 3, payload.duration) if payload.duration else start + 3
+        db.add(MixProjectAsset(mix_project_id=project.id, asset_id=asset_id, order_index=index,
+                               start_second=start, end_second=end, usage_type="hook" if index == 0 else "product"))
+    db.commit(); db.refresh(project)
+    return {"project": serialize(project), "plan": plan}
 
 @app.get("/api/search")
 def semantic_search(q: str = Query(..., min_length=1), entity: str = Query("assets"), type: str | None = None, market_id: int | None = None, product_id: int | None = None, tag_id: int | None = None, source_platform: str | None = None, limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):

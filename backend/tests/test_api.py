@@ -70,6 +70,17 @@ def test_recommendation_returns_four_sections(clean_database):
     assert set(("assets", "scripts", "templates", "mix_plans")) <= data.keys()
     assert data["assets"][0]["reasons"]
     assert data["mix_plans"] and {"script_id", "template_id", "asset_ids", "reasons"} <= data["mix_plans"][0].keys()
+    assert "score_breakdown" in data["mix_plans"][0]
+
+def test_adopt_recommendation_creates_project_and_timeline(clean_database):
+    common = {"market_id": clean_database["market_id"], "product_id": clean_database["product_id"]}
+    client.post("/api/assets", json={"name": "Adopt clip", "asset_type": "pain_point", "duration": 3, **common})
+    client.post("/api/scripts", json={"title": "Adopt hook", "script_type": "pain_point", "duration": 20, **common})
+    client.post("/api/templates", json={"name": "Adopt flow", "template_type": "pain_point", "recommended_duration": 20, **common})
+    response = client.post("/api/assistant/adopt", json={"market_id": common["market_id"], "product_id": common["product_id"], "content_type": "pain_point", "duration": 20, "keywords": ["adopt"], "plan_index": 0})
+    assert response.status_code == 201
+    project = response.json()["project"]
+    assert project["id"] and project["timeline"] and response.json()["plan"]["score_breakdown"]
 
 
 def test_mix_project_timeline_and_video_lineage(clean_database):

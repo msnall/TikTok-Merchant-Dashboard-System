@@ -23,7 +23,14 @@ def _score(item, market_id, product_id, type_value, duration, keywords):
     if duration and item_duration is not None:
         duration_score = max(0, 1 - abs(item_duration - duration) / max(duration, 1)); score += .10 * duration_score
         if duration_score >= .75: reasons.append("时长接近目标")
-    return round(min(score, 1), 3), reasons
+    breakdown = {
+        "market": round(.30 * market, 3),
+        "product": round(.25 * product, 3),
+        "content_type": round(.20 * type_match, 3),
+        "semantic": round(.15 * semantic, 3),
+        "duration": round(.10 * duration_score, 3),
+    }
+    return round(min(score, 1), 3), reasons, breakdown
 
 def recommendations(db: Session, market_id=None, product_id=None, content_type=None, duration=None, keywords=None):
     keywords = keywords or []
@@ -32,8 +39,8 @@ def recommendations(db: Session, market_id=None, product_id=None, content_type=N
         items = db.scalars(select(model)).all()
         ranked = []
         for item in items:
-            score, reasons = _score(item, market_id, product_id, content_type, duration, keywords)
-            ranked.append({"item": item, "score": score, "reasons": reasons})
+            score, reasons, breakdown = _score(item, market_id, product_id, content_type, duration, keywords)
+            ranked.append({"item": item, "score": score, "reasons": reasons, "score_breakdown": breakdown})
         ranked.sort(key=lambda x: x["score"], reverse=True)
         result[key] = ranked[:10]
     plans = []
@@ -45,6 +52,7 @@ def recommendations(db: Session, market_id=None, product_id=None, content_type=N
         if not chosen_assets: continue
         plan_score = round((script["score"] + template["score"] + sum(item["score"] for item in chosen_assets)) / (2 + len(chosen_assets)), 3)
         plan_reasons = list(dict.fromkeys(script["reasons"] + template["reasons"] + [reason for item in chosen_assets for reason in item["reasons"]]))
-        plans.append({"id": f"generated-{index + 1}", "score": plan_score, "script_id": script["item"].id, "template_id": template["item"].id, "asset_ids": [item["item"].id for item in chosen_assets], "target_duration": duration, "reasons": plan_reasons})
+        plans.append({"id": f"generated-{index + 1}", "score": plan_score, "script_id": script["item"].id, "template_id": template["item"].id, "asset_ids": [item["item"].id for item in chosen_assets], "target_duration": duration, "reasons": plan_reasons,
+                      "score_breakdown": {key: round((script["score_breakdown"][key] + template["score_breakdown"][key] + sum(item["score_breakdown"][key] for item in chosen_assets)) / (2 + len(chosen_assets)), 3) for key in ("market", "product", "content_type", "semantic", "duration")}})
     result["mix_plans"] = plans
     return result

@@ -124,3 +124,7 @@ class RecommendationRequest(Payload):
     content_type: str | None = None
     duration: float | None = Field(default=None, ge=0)
     keywords: list[str] = Field(default_factory=list)
+
+class AdoptRecommendationRequest(RecommendationRequest):
+    plan_index: int = Field(default=0, ge=0, le=9)
+    name: str | None = Field(default=None, max_length=200)
