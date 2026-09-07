@@ -66,12 +66,13 @@ def health(): return {"status": "ok", "service": "content-system"}
 
 def make_crud(path, model):
     @app.get(f"/api/{path}")
-    def list_items(db: Session = Depends(get_db), q: str | None = Query(None), market_id: int | None = None, product_id: int | None = None, asset_type: str | None = None, script_type: str | None = None, template_type: str | None = None, source_platform: str | None = None, tag_id: int | None = None, mix_project_id: int | None = None, video_work_id: int | None = None):
+    def list_items(db: Session = Depends(get_db), q: str | None = Query(None), market_id: int | None = None, product_id: int | None = None, asset_type: str | None = None, script_type: str | None = None, template_type: str | None = None, source_platform: str | None = None, tag_id: int | None = None, mix_project_id: int | None = None, video_work_id: int | None = None, asset_id: int | None = None):
         stmt = select(model)
         for field, value in (("market_id", market_id), ("product_id", product_id), ("asset_type", asset_type), ("script_type", script_type), ("template_type", template_type), ("source_platform", source_platform)):
             if value is not None and field in ID_FIELDS[model]: stmt = stmt.where(getattr(model, field) == value)
         if mix_project_id is not None and model is VideoWork: stmt = stmt.where(model.mix_project_id == mix_project_id)
         if video_work_id is not None and model is ContentVersion: stmt = stmt.where(model.video_work_id == video_work_id)
+        if asset_id is not None and model is AssetFile: stmt = stmt.where(model.asset_id == asset_id)
         if tag_id is not None and model in (Asset, Script): stmt = stmt.join(model.tag_entities).where(Tag.id == tag_id)
         if q:
             fields = [getattr(model, f) for f in ("name", "title", "description", "tags_text", "full_text") if hasattr(model, f)]
