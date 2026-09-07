@@ -15,6 +15,8 @@ from .schemas import RecommendationRequest, MarketCreate, ProductCreate, AssetCr
 from .services import recommendations
 from .semantic import embed, item_text, cosine, stored_embedding
 import json
+import shutil
+import subprocess
 
 app = FastAPI(title="TikTok Content System API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -146,6 +148,18 @@ async def upload_asset_file(item_id: int, file: UploadFile = File(...), db: Sess
             if size > settings.max_upload_size:
                 target.unlink(missing_ok=True); raise HTTPException(413, "File too large")
             output.write(chunk)
+    # Normalize MP4 uploads to H.264/AAC when ffmpeg is available so browser
+    # previews work for source files encoded as HEVC/H.265.
+    if suffix == ".mp4" and shutil.which("ffmpeg"):
+        compatible = target.with_name(f"{target.stem}-h264.mp4")
+        try:
+            result = subprocess.run([shutil.which("ffmpeg"), "-y", "-i", str(target), "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(compatible)], capture_output=True, timeout=300)
+            if result.returncode == 0 and compatible.exists() and compatible.stat().st_size > 0:
+                target.unlink(missing_ok=True)
+                compatible.replace(target)
+                size = target.stat().st_size
+        except (OSError, subprocess.SubprocessError):
+            compatible.unlink(missing_ok=True)
     asset.file_path = str(target.relative_to(Path(settings.storage_dir).resolve()))
     db.add(AssetFile(asset_id=asset.id, file_path=asset.file_path, file_type=file.content_type or suffix.lstrip("."), file_size=size, is_thumbnail=False))
     db.commit(); db.refresh(asset)
