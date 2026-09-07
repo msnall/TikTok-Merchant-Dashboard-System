@@ -9,5 +9,6 @@
 .lineage-row{display:flex;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid #edf1f2}.lineage-row span{color:#718184;text-align:right}
 .upload-preview{width:220px;aspect-ratio:9 / 16;max-height:300px;margin-top:12px;background:#17252b;border-radius:6px;overflow:hidden;display:flex;align-items:center;justify-content:center}.upload-preview img,.upload-preview video{display:block;width:100%;height:100%;object-fit:contain}
 .file-info{display:flex;flex-direction:column;gap:4px;margin-top:10px;color:#718184;font-size:12px;word-break:break-all}.preview-error{padding:10px 12px;background:#fff2f0;color:#b42318;border-radius:5px;font-size:13px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid .el-form-item{margin-bottom:18px}
 @media(max-width:800px){.distribution-grid{grid-template-columns:1fr}}
 @media(max-width:800px){.detail-layout{grid-template-columns:1fr}}
