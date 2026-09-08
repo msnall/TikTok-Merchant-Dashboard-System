@@ -14,6 +14,9 @@ from .models import Market, Product, Asset, Script, ContentTemplate, MixProject,
 from .schemas import RecommendationRequest, AdoptRecommendationRequest, MarketCreate, ProductCreate, AssetCreate, ScriptCreate, TemplateCreate, MixProjectCreate, MixProjectAssetCreate, VideoWorkCreate, TagCreate
 from .services import recommendations
 from .semantic import embed, item_text, cosine, stored_embedding
+from . import ad_models
+from .ad_api import router as ad_router
+from .workbench_api import router as workbench_router
 import json
 import io
 import re
@@ -25,6 +28,8 @@ app = FastAPI(title="TikTok Content System API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 Path(settings.storage_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/storage", StaticFiles(directory=settings.storage_dir), name="storage")
+app.include_router(ad_router)
+app.include_router(workbench_router)
 
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError):

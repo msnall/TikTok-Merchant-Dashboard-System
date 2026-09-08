@@ -144,3 +144,46 @@ def test_hybrid_search_and_version_lineage(clean_database):
     client.post("/api/assets", json={"name": "Indonesia sunscreen texture", "description": "lightweight SPF demo", **clean_database})
     result = client.get("/api/search", params={"q": "lightweight sunscreen", "entity": "assets"}).json()
     assert result and "semantic_score" in result[0] and "final_score" in result[0]
+
+
+def _csv_file(rows):
+    header = "广告计划,市场,产品,消耗,订单,销售额,实际ROI,预算,策略,客单价,目标ROI\n"
+    return (header + "\n".join(",".join(str(value) for value in row) for row in rows)).encode("utf-8-sig")
+
+
+def test_ad_import_creates_snapshots_and_classifies_alerts(clean_database):
+    rows = [
+        ("Burn plan", "Indonesia", "Sunscreen", 120, 0, 0, 0, 200, "A", 50, 1.5),
+        ("Low ROI plan", "Indonesia", "Sunscreen", 10, 1, 10, 0.5, 200, "A", 50, 1.5),
+        ("Idle plan", "Indonesia", "Sunscreen", 0, 0, 0, "", 200, "A", 50, 1.5),
+    ]
+    response = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")})
+    assert response.status_code == 201
+    assert response.json()["snapshots"] == 3
+    plans = {item["plan_name"]: item for item in client.get("/api/ads/plans").json()}
+    assert plans["Burn plan"]["current_status"] == "empty_burn"
+    assert plans["Low ROI plan"]["current_status"] == "low_roi"
+    assert plans["Idle plan"]["current_status"] == "no_spend"
+    second = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file([( "Burn plan", "Indonesia", "Sunscreen", 5, 1, 10, 2, 200, "A", 50, 1.5)]), "text/csv")})
+    assert second.status_code == 201
+    assert len(client.get("/api/ads/snapshots", params={"ad_plan_id": plans["Burn plan"]["id"]}).json()) == 2
+    assert len(client.get("/api/ads/import-batches").json()) == 2
+
+
+def test_ad_import_rejects_invalid_file(clean_database):
+    response = client.post("/api/ads/import", files={"file": ("ads.pdf", b"not supported", "application/pdf")})
+    assert response.status_code == 400
+
+
+def test_workbench_and_operation_record_validation(clean_database):
+    plan = client.post("/api/ads/plans", json={"plan_name": "Review plan", "current_status": "low_roi"}).json()
+    workbench = client.get("/api/workbench/today")
+    assert workbench.status_code == 200
+    assert any(item["id"] == plan["id"] for item in workbench.json()["ad_alerts"])
+    invalid = client.post("/api/operations", json={"ad_plan_id": plan["id"], "operation_type": "unknown"})
+    assert invalid.status_code == 422
+    missing = client.post("/api/operations", json={"ad_plan_id": 9999, "operation_type": "direct_stop"})
+    assert missing.status_code == 404
+    created = client.post("/api/operations", json={"ad_plan_id": plan["id"], "operation_type": "direct_stop", "reason": "empty burn"})
+    assert created.status_code == 201
+    assert client.get("/api/operations", params={"ad_plan_id": plan["id"]}).json()[0]["operation_type"] == "direct_stop"
