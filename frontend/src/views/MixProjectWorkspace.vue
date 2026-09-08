@@ -14,18 +14,27 @@
       <el-form-item label="内容模板"><el-select v-model="form.template_id" clearable filterable><el-option v-for="item in templates" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
     </el-form>
 
-    <section class="workspace-panel">
-      <div class="section-head"><h3>时间轴</h3><el-button size="small" @click="addAsset">添加素材</el-button></div>
-      <el-table :data="timeline" stripe empty-text="暂无素材，请从右侧添加">
-        <el-table-column type="index" label="#" width="55" />
-        <el-table-column label="素材" min-width="220"><template #default="scope"><el-select v-model="scope.row.asset_id" filterable><el-option v-for="item in assets" :key="item.id" :label="item.name" :value="item.id" /></el-select></template></el-table-column>
-        <el-table-column label="用途" width="150"><template #default="scope"><el-input v-model="scope.row.usage_type" placeholder="hook / demo" /></template></el-table-column>
-        <el-table-column label="开始（秒）" width="150"><template #default="scope"><el-input-number v-model="scope.row.start_second" :min="0" :precision="1" /></template></el-table-column>
-        <el-table-column label="结束（秒）" width="150"><template #default="scope"><el-input-number v-model="scope.row.end_second" :min="0.1" :precision="1" /></template></el-table-column>
-        <el-table-column label="顺序" width="130"><template #default="scope"><el-button link :disabled="scope.$index === 0" @click="moveTimeline(scope.$index, -1)">上移</el-button><el-button link :disabled="scope.$index === timeline.length - 1" @click="moveTimeline(scope.$index, 1)">下移</el-button></template></el-table-column>
-        <el-table-column label="操作" width="90"><template #default="scope"><el-button link type="danger" @click="timeline.splice(scope.$index, 1)">移除</el-button></template></el-table-column>
-      </el-table>
-      <p class="helper">时间轴会校验开始时间不小于 0、结束时间大于开始时间且不超过目标时长。</p>
+    <section class="workspace-panel timeline-panel">
+      <div class="section-head"><div><h3>执行时间轴</h3><span class="muted">{{ timeline.length }} 段素材 · 点击分段即可预览和下载源文件</span></div><div class="section-actions"><a v-if="projectId" class="download-all" :href="`/api/mix-projects/${projectId}/assets.zip`">下载全部素材</a><el-button size="small" @click="addAsset">添加素材</el-button></div></div>
+      <div class="timeline-workspace">
+        <div class="timeline-segments">
+          <article v-for="(row,index) in timeline" :key="`${row.asset_id}-${index}`" class="timeline-segment" :class="{selected:selectedIndex === index}" @click="selectSegment(index)">
+            <div class="segment-heading"><span class="segment-number">{{ String(index + 1).padStart(2,'0') }}</span><div><strong>{{ assetFor(row.asset_id)?.name || '请选择素材' }}</strong><small>{{ timeLabel(row) }} · {{ row.usage_type || '未设置用途' }}</small></div><span class="file-state" :class="{ready:Boolean(assetFor(row.asset_id)?.file_path)}">{{ assetFor(row.asset_id)?.file_path ? '源文件就绪' : '缺少源文件' }}</span></div>
+            <div class="segment-fields" @click.stop><label>素材<el-select v-model="row.asset_id" filterable @change="selectSegment(index)"><el-option v-for="item in assets" :key="item.id" :label="item.name" :value="item.id"/></el-select></label><label>用途<el-input v-model="row.usage_type" placeholder="hook / demo"/></label><label>开始（秒）<el-input-number v-model="row.start_second" :min="0" :precision="1"/></label><label>结束（秒）<el-input-number v-model="row.end_second" :min="0.1" :precision="1"/></label></div>
+            <div class="segment-actions" @click.stop><el-button link type="primary" @click="selectSegment(index)">预览</el-button><el-button link @click="openAsset(row.asset_id)">素材详情</el-button><a v-if="assetFor(row.asset_id)?.file_path" class="action-link" :href="assetMediaUrl(assetFor(row.asset_id))" :download="downloadName(assetFor(row.asset_id))">下载</a><span v-else class="action-disabled">无法下载</span><span class="action-spacer"></span><el-button link :disabled="index === 0" @click="moveTimeline(index,-1)">上移</el-button><el-button link :disabled="index === timeline.length - 1" @click="moveTimeline(index,1)">下移</el-button><el-button link type="danger" @click="removeSegment(index)">移除</el-button></div>
+          </article>
+          <el-empty v-if="!timeline.length" description="暂无素材，请添加时间轴分段" :image-size="70"/>
+          <p class="helper">时间轴会校验开始时间不小于 0、结束时间大于开始时间且不超过目标时长。</p>
+        </div>
+        <aside class="asset-inspector">
+          <template v-if="selectedAsset">
+            <div class="inspector-head"><div><span class="eyebrow">SELECTED ASSET</span><h3>第 {{ selectedIndex + 1 }} 段素材</h3></div><span class="file-state" :class="{ready:Boolean(selectedAsset.file_path)}">{{ selectedAsset.file_path ? '可用于剪映' : '未上传' }}</span></div>
+            <div class="inspector-media"><img v-if="isImageAsset(selectedAsset)" :src="assetMediaUrl(selectedAsset)" alt="素材预览"/><video v-else-if="isVideoAsset(selectedAsset)" :key="assetMediaUrl(selectedAsset)" :src="assetMediaUrl(selectedAsset)" controls preload="metadata"/><el-empty v-else description="该素材尚未上传源文件" :image-size="60"/></div>
+            <h4>{{ selectedAsset.name }}</h4><div class="asset-meta"><span>{{ selectedAsset.asset_type || '未分类' }}</span><span>{{ selectedAsset.duration || 0 }} 秒</span><span>{{ selectedAsset.source_platform || '未知来源' }}</span></div><p class="asset-description">{{ selectedAsset.description || '暂无素材说明' }}</p>
+            <div class="inspector-actions"><a v-if="selectedAsset.file_path" class="download-button" :href="assetMediaUrl(selectedAsset)" :download="downloadName(selectedAsset)">下载源文件</a><el-button @click="openAsset(selectedAsset.id)">打开素材详情</el-button><a v-if="selectedAsset.source_url" class="source-link" :href="selectedAsset.source_url" target="_blank" rel="noopener">查看来源</a></div>
+          </template><el-empty v-else description="选择一段素材后在这里预览" :image-size="70"/>
+        </aside>
+      </div>
     </section>
 
     <section v-if="isEditing" class="workspace-panel lineage-panel">
@@ -44,7 +53,8 @@ import { ElMessage } from 'element-plus';
 const route = useRoute(); const router = useRouter();
 const projectId = computed(() => Number(route.params.id) || null); const isEditing = computed(() => Boolean(projectId.value));
 const form = ref<any>({ name: '', market_id: null, product_id: null, script_id: null, template_id: null, target_duration: 20, status: 'draft' });
-const markets = ref<any[]>([]), products = ref<any[]>([]), scripts = ref<any[]>([]), templates = ref<any[]>([]), assets = ref<any[]>([]), videos = ref<any[]>([]), timeline = ref<any[]>([]), saving = ref(false), cloning = ref(false);
+const markets = ref<any[]>([]), products = ref<any[]>([]), scripts = ref<any[]>([]), templates = ref<any[]>([]), assets = ref<any[]>([]), videos = ref<any[]>([]), timeline = ref<any[]>([]), saving = ref(false), cloning = ref(false), selectedIndex = ref(0);
+const selectedAsset = computed(() => timeline.value[selectedIndex.value] ? assetFor(timeline.value[selectedIndex.value].asset_id) : null);
 
 async function load() {
   const [marketResult, productResult, scriptResult, templateResult, assetResult] = await Promise.all([
@@ -53,14 +63,23 @@ async function load() {
   markets.value = marketResult.data; products.value = productResult.data; scripts.value = scriptResult.data; templates.value = templateResult.data; assets.value = assetResult.data;
   if (projectId.value) {
     const project = (await axios.get(`/api/mix-projects/${projectId.value}`)).data; form.value = { ...form.value, ...project }; timeline.value = (project.timeline || []).map((item: any, index: number) => ({ mix_project_id: project.id, asset_id: item.asset.id, order_index: index, start_second: item.start_second ?? index * 3, end_second: item.end_second ?? (index + 1) * 3, usage_type: item.usage_type || '' }));
-    videos.value = (await axios.get('/api/videos', { params: { mix_project_id: project.id } })).data;
+    videos.value = (await axios.get('/api/videos', { params: { mix_project_id: project.id } })).data; selectedIndex.value = Math.min(selectedIndex.value, Math.max(timeline.value.length - 1, 0));
   } else {
     const query = route.query; form.value.market_id = query.market_id ? Number(query.market_id) : null; form.value.product_id = query.product_id ? Number(query.product_id) : null; form.value.script_id = query.script_id ? Number(query.script_id) : null; form.value.template_id = query.template_id ? Number(query.template_id) : null; form.value.target_duration = query.duration ? Number(query.duration) : 20; form.value.name = query.name || '新建混剪方案';
     const ids = String(query.asset_ids || '').split(',').map(Number).filter(Boolean); timeline.value = ids.map((assetId, index) => ({ asset_id: assetId, order_index: index, start_second: index * 3, end_second: Math.min((index + 1) * 3, form.value.target_duration), usage_type: index === 0 ? 'hook' : 'product' }));
   }
 }
 function addAsset() { const first = assets.value.find(item => !timeline.value.some(row => row.asset_id === item.id)) || assets.value[0]; if (first) { const start = timeline.value.length ? timeline.value[timeline.value.length - 1].end_second : 0; timeline.value.push({ asset_id: first.id, order_index: timeline.value.length, start_second: start, end_second: Math.min(start + 3, form.value.target_duration), usage_type: 'product' }); } }
-function moveTimeline(index: number, offset: number) { const target = index + offset; if (target < 0 || target >= timeline.value.length) return; const currentAsset = timeline.value[index].asset_id, currentUsage = timeline.value[index].usage_type; timeline.value[index].asset_id = timeline.value[target].asset_id; timeline.value[index].usage_type = timeline.value[target].usage_type; timeline.value[target].asset_id = currentAsset; timeline.value[target].usage_type = currentUsage; }
+function assetFor(id: number) { return assets.value.find(item => item.id === id); }
+function assetMediaUrl(asset: any) { return asset?.file_path ? `/storage/${String(asset.file_path).replaceAll('\\','/')}` : ''; }
+function isImageAsset(asset: any) { return /\.(jpg|jpeg|png|webp)$/i.test(assetMediaUrl(asset)); }
+function isVideoAsset(asset: any) { return /\.(mp4|mov|webm)$/i.test(assetMediaUrl(asset)); }
+function downloadName(asset: any) { const extension = String(asset?.file_path || '').split('.').pop() || 'mp4'; return `${asset?.name || '素材'}.${extension}`; }
+function timeLabel(row: any) { return `${Number(row.start_second || 0).toFixed(1)}–${Number(row.end_second || 0).toFixed(1)} 秒`; }
+function selectSegment(index: number) { selectedIndex.value = index; }
+function openAsset(id: number) { window.open(router.resolve(`/assets/${id}`).href, '_blank', 'noopener'); }
+function removeSegment(index: number) { timeline.value.splice(index,1); selectedIndex.value = Math.min(selectedIndex.value, Math.max(timeline.value.length - 1,0)); }
+function moveTimeline(index: number, offset: number) { const target = index + offset; if (target < 0 || target >= timeline.value.length) return; const currentAsset = timeline.value[index].asset_id, currentUsage = timeline.value[index].usage_type; timeline.value[index].asset_id = timeline.value[target].asset_id; timeline.value[index].usage_type = timeline.value[target].usage_type; timeline.value[target].asset_id = currentAsset; timeline.value[target].usage_type = currentUsage; selectedIndex.value = target; }
 async function saveProject() {
   if (!form.value.name?.trim()) return ElMessage.warning('请填写方案名称'); saving.value = true;
   try {

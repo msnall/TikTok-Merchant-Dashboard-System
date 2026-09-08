@@ -1,7 +1,7 @@
 from pathlib import Path
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, func, inspect, or_
@@ -15,8 +15,11 @@ from .schemas import RecommendationRequest, AdoptRecommendationRequest, MarketCr
 from .services import recommendations
 from .semantic import embed, item_text, cosine, stored_embedding
 import json
+import io
+import re
 import shutil
 import subprocess
+import zipfile
 
 app = FastAPI(title="TikTok Content System API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -293,6 +296,26 @@ def clone_mix_project(project_id: int, db: Session = Depends(get_db)):
                                usage_type=entry.usage_type, notes=entry.notes))
     db.commit(); db.refresh(clone)
     return serialize(clone)
+
+@app.get("/api/mix-projects/{project_id}/assets.zip")
+def download_mix_project_assets(project_id: int, db: Session = Depends(get_db)):
+    project = db.get(MixProject, project_id)
+    if not project: raise HTTPException(404, "Mix project not found")
+    storage_root = Path(settings.storage_dir).resolve()
+    archive = io.BytesIO()
+    file_count = 0
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for index, entry in enumerate(sorted(project.assets, key=lambda row: row.order_index), start=1):
+            if not entry.asset.file_path: continue
+            source = (storage_root / entry.asset.file_path).resolve()
+            if storage_root not in source.parents or not source.is_file(): continue
+            safe_name = re.sub(r'[^\w\-.\u4e00-\u9fff]+', '_', entry.asset.name).strip('_') or f"asset-{entry.asset.id}"
+            bundle.write(source, f"{index:02d}_{safe_name}{source.suffix.lower()}")
+            file_count += 1
+        if not file_count: raise HTTPException(404, "该方案没有可下载的源文件")
+    archive.seek(0)
+    headers = {"Content-Disposition": f'attachment; filename="mix-project-{project_id}-assets.zip"'}
+    return StreamingResponse(archive, media_type="application/zip", headers=headers)
 
 @app.get("/api/dashboard")
 def dashboard(db: Session = Depends(get_db)):
