@@ -2,6 +2,7 @@ from alembic import context
 from app.db import Base
 from app import models
 from app import ad_models
+from app import work_models
 from app.config import settings
 target_metadata = Base.metadata
 config = context.config

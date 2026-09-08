@@ -187,3 +187,31 @@ def test_workbench_and_operation_record_validation(clean_database):
     created = client.post("/api/operations", json={"ad_plan_id": plan["id"], "operation_type": "direct_stop", "reason": "empty burn"})
     assert created.status_code == 201
     assert client.get("/api/operations", params={"ad_plan_id": plan["id"]}).json()[0]["operation_type"] == "direct_stop"
+
+
+def test_daily_work_tasks_are_persisted_and_idempotent(clean_database):
+    plan = client.post("/api/ads/plans", json={"plan_name": "Alert plan", "current_status": "low_roi"}).json()
+    first = client.get("/api/work-tasks", params={"task_date": "2026-09-09"})
+    assert first.status_code == 200
+    tasks = first.json()
+    assert len([item for item in tasks if item["source"] == "sop"]) == 13
+    assert len([item for item in tasks if item["task_type"] == "ad_alert" and item["related_id"] == plan["id"]]) == 1
+    second = client.post("/api/work-tasks/generate", params={"task_date": "2026-09-09"})
+    assert second.status_code == 200 and len(second.json()) == len(tasks)
+    morning_customer = [item for item in tasks if item["title"] == "客服消息"]
+    evening_customer = [item for item in tasks if item["title"] == "客服消息复查"]
+    assert morning_customer and evening_customer
+    task_id = morning_customer[0]["id"]
+    updated = client.patch(f"/api/work-tasks/{task_id}/status", json={"status": "completed", "notes": "已完成检查"})
+    assert updated.status_code == 200 and updated.json()["completed_at"]
+    assert client.get(f"/api/work-tasks/{task_id}").json()["status"] == "completed"
+    assert client.patch(f"/api/work-tasks/{task_id}/status", json={"status": "bad"}).status_code == 422
+
+
+def test_workbench_returns_persisted_tasks_for_requested_date(clean_database):
+    response = client.get("/api/workbench/today", params={"task_date": "2026-09-10"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["date"] == "2026-09-10"
+    assert len(data["tasks"]) >= 13
+    assert all("id" in item and "priority" in item for item in data["tasks"])
