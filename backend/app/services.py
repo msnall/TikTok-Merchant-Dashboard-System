@@ -46,13 +46,25 @@ def recommendations(db: Session, market_id=None, product_id=None, content_type=N
     plans = []
     scripts = result["scripts"][:3]
     templates = result["templates"][:3]
-    assets = result["assets"][:3]
+    assets = result["assets"][:5]
     for index, (script, template) in enumerate(zip(scripts, templates)):
-        chosen_assets = assets[index:index + 1] or assets[:1]
+        chosen_assets = (assets[index:] + assets[:index])[:3]
         if not chosen_assets: continue
         plan_score = round((script["score"] + template["score"] + sum(item["score"] for item in chosen_assets)) / (2 + len(chosen_assets)), 3)
         plan_reasons = list(dict.fromkeys(script["reasons"] + template["reasons"] + [reason for item in chosen_assets for reason in item["reasons"]]))
+        segment = (duration / len(chosen_assets)) if duration else None
+        cursor = 0.0
+        timeline = []
+        for asset_index, item in enumerate(chosen_assets):
+            asset_duration = item["item"].duration or 3
+            clip_duration = segment if segment is not None else asset_duration
+            end = duration if duration is not None and asset_index == len(chosen_assets) - 1 else round(cursor + clip_duration, 2)
+            timeline.append({"asset_id": item["item"].id, "order_index": asset_index,
+                             "start_second": round(cursor, 2), "end_second": end,
+                             "usage_type": ("hook", "product", "cta")[min(asset_index, 2)]})
+            cursor = end
         plans.append({"id": f"generated-{index + 1}", "score": plan_score, "script_id": script["item"].id, "template_id": template["item"].id, "asset_ids": [item["item"].id for item in chosen_assets], "target_duration": duration, "reasons": plan_reasons,
+                      "timeline": timeline,
                       "score_breakdown": {key: round((script["score_breakdown"][key] + template["score_breakdown"][key] + sum(item["score_breakdown"][key] for item in chosen_assets)) / (2 + len(chosen_assets)), 3) for key in ("market", "product", "content_type", "semantic", "duration")}})
     result["mix_plans"] = plans
     return result

@@ -68,7 +68,7 @@ def health(): return {"status": "ok", "service": "content-system"}
 
 def make_crud(path, model):
     @app.get(f"/api/{path}")
-    def list_items(db: Session = Depends(get_db), q: str | None = Query(None), market_id: int | None = None, product_id: int | None = None, asset_type: str | None = None, script_type: str | None = None, template_type: str | None = None, source_platform: str | None = None, tag_id: int | None = None, mix_project_id: int | None = None, video_work_id: int | None = None, asset_id: int | None = None):
+    def list_items(db: Session = Depends(get_db), q: str | None = Query(None), market_id: int | None = None, product_id: int | None = None, asset_type: str | None = None, script_type: str | None = None, template_type: str | None = None, source_platform: str | None = None, tag_id: int | None = None, duration_min: float | None = Query(None, ge=0), duration_max: float | None = Query(None, ge=0), mix_project_id: int | None = None, video_work_id: int | None = None, asset_id: int | None = None):
         stmt = select(model)
         for field, value in (("market_id", market_id), ("product_id", product_id), ("asset_type", asset_type), ("script_type", script_type), ("template_type", template_type), ("source_platform", source_platform)):
             if value is not None and field in ID_FIELDS[model]: stmt = stmt.where(getattr(model, field) == value)
@@ -76,6 +76,11 @@ def make_crud(path, model):
         if video_work_id is not None and model is ContentVersion: stmt = stmt.where(model.video_work_id == video_work_id)
         if asset_id is not None and model is AssetFile: stmt = stmt.where(model.asset_id == asset_id)
         if tag_id is not None and model in (Asset, Script): stmt = stmt.join(model.tag_entities).where(Tag.id == tag_id)
+        duration_field = getattr(model, "duration", None)
+        if duration_field is None: duration_field = getattr(model, "recommended_duration", None)
+        if duration_field is not None:
+            if duration_min is not None: stmt = stmt.where(duration_field >= duration_min)
+            if duration_max is not None: stmt = stmt.where(duration_field <= duration_max)
         if q:
             fields = [getattr(model, f) for f in ("name", "title", "description", "tags_text", "full_text") if hasattr(model, f)]
             if fields: stmt = stmt.where(or_(*(f.ilike(f"%{q}%") for f in fields)))
@@ -165,6 +170,34 @@ async def upload_asset_file(item_id: int, file: UploadFile = File(...), db: Sess
     db.commit(); db.refresh(asset)
     return serialize(asset)
 
+@app.post("/api/videos/{video_id}/file")
+async def upload_video_file(video_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    video = db.get(VideoWork, video_id)
+    if not video: raise HTTPException(404, "Video not found")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".mp4", ".mov", ".webm"}: raise HTTPException(400, "Unsupported video extension")
+    target_dir = Path(settings.storage_dir, "videos").resolve(); target_dir.mkdir(parents=True, exist_ok=True)
+    target = (target_dir / f"video-{video_id}{suffix}").resolve()
+    if target.parent != target_dir: raise HTTPException(400, "Invalid filename")
+    size = 0
+    with target.open("wb") as output:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > settings.max_upload_size:
+                target.unlink(missing_ok=True); raise HTTPException(413, "File too large")
+            output.write(chunk)
+    if suffix == ".mp4" and shutil.which("ffmpeg"):
+        compatible = target.with_name(f"{target.stem}-h264.mp4")
+        try:
+            result = subprocess.run([shutil.which("ffmpeg"), "-y", "-i", str(target), "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(compatible)], capture_output=True, timeout=300)
+            if result.returncode == 0 and compatible.exists() and compatible.stat().st_size > 0:
+                target.unlink(missing_ok=True); compatible.replace(target)
+        except (OSError, subprocess.SubprocessError):
+            compatible.unlink(missing_ok=True)
+    video.file_path = str(target.relative_to(Path(settings.storage_dir).resolve()))
+    db.commit(); db.refresh(video)
+    return serialize(video)
+
 @app.post("/api/assistant/recommend")
 def recommend(payload: RecommendationRequest, db: Session = Depends(get_db)):
     ranked = recommendations(db, **payload.model_dump())
@@ -187,16 +220,13 @@ def adopt_recommendation(payload: AdoptRecommendationRequest, db: Session = Depe
                          product_id=payload.product_id, script_id=plan["script_id"], template_id=plan["template_id"],
                          target_duration=payload.duration, status="draft", notes="由创作助手推荐采用")
     db.add(project); db.flush()
-    for index, asset_id in enumerate(plan["asset_ids"]):
-        start = index * 3
-        end = min(start + 3, payload.duration) if payload.duration else start + 3
-        db.add(MixProjectAsset(mix_project_id=project.id, asset_id=asset_id, order_index=index,
-                               start_second=start, end_second=end, usage_type="hook" if index == 0 else "product"))
+    for entry in plan["timeline"]:
+        db.add(MixProjectAsset(mix_project_id=project.id, **entry))
     db.commit(); db.refresh(project)
     return {"project": serialize(project), "plan": plan}
 
 @app.get("/api/search")
-def semantic_search(q: str = Query(..., min_length=1), entity: str = Query("assets"), type: str | None = None, market_id: int | None = None, product_id: int | None = None, tag_id: int | None = None, source_platform: str | None = None, limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):
+def semantic_search(q: str = Query(..., min_length=1), entity: str = Query("assets"), type: str | None = None, market_id: int | None = None, product_id: int | None = None, tag_id: int | None = None, source_platform: str | None = None, duration_min: float | None = Query(None, ge=0), duration_max: float | None = Query(None, ge=0), limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):
     """Hybrid lexical + local semantic search. pgvector can replace stored_embedding without changing this contract."""
     model = MODEL_MAP.get(entity)
     if model not in (Asset, Script, ContentTemplate): raise HTTPException(400, "entity must be assets, scripts, or templates")
@@ -209,6 +239,9 @@ def semantic_search(q: str = Query(..., min_length=1), entity: str = Query("asse
         type_field = "asset_type" if model is Asset else "script_type" if model is Script else "template_type"
         if type is not None and getattr(item, type_field, None) != type: continue
         if tag_id is not None and model in (Asset, Script) and not any(tag.id == tag_id for tag in item.tag_entities): continue
+        item_duration = getattr(item, "duration", None) or getattr(item, "recommended_duration", None)
+        if duration_min is not None and (item_duration is None or item_duration < duration_min): continue
+        if duration_max is not None and (item_duration is None or item_duration > duration_max): continue
         text = item_text(item).lower(); keyword_score = sum(token in text for token in query_tokens) / len(query_tokens) if query_tokens else 0
         semantic_score = cosine(embed(q), stored_embedding(item))
         final_score = round(.45 * keyword_score + .55 * semantic_score, 4)
@@ -245,6 +278,21 @@ def replace_timeline(project_id: int, entries: list[MixProjectAssetCreate], db: 
         values = entry.model_dump(exclude={"mix_project_id", "order_index"})
         db.add(MixProjectAsset(mix_project_id=project_id, order_index=index, **values))
     db.commit(); db.refresh(project); return serialize(project)
+
+@app.post("/api/mix-projects/{project_id}/clone", status_code=201)
+def clone_mix_project(project_id: int, db: Session = Depends(get_db)):
+    source = db.get(MixProject, project_id)
+    if not source: raise HTTPException(404, "Mix project not found")
+    clone = MixProject(name=f"{source.name} - 副本", market_id=source.market_id, product_id=source.product_id,
+                       script_id=source.script_id, template_id=source.template_id, target_duration=source.target_duration,
+                       status="draft", notes=source.notes)
+    db.add(clone); db.flush()
+    for entry in sorted(source.assets, key=lambda row: row.order_index):
+        db.add(MixProjectAsset(mix_project_id=clone.id, asset_id=entry.asset_id, order_index=entry.order_index,
+                               start_second=entry.start_second, end_second=entry.end_second,
+                               usage_type=entry.usage_type, notes=entry.notes))
+    db.commit(); db.refresh(clone)
+    return serialize(clone)
 
 @app.get("/api/dashboard")
 def dashboard(db: Session = Depends(get_db)):

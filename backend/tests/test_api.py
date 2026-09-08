@@ -74,13 +74,29 @@ def test_recommendation_returns_four_sections(clean_database):
 
 def test_adopt_recommendation_creates_project_and_timeline(clean_database):
     common = {"market_id": clean_database["market_id"], "product_id": clean_database["product_id"]}
-    client.post("/api/assets", json={"name": "Adopt clip", "asset_type": "pain_point", "duration": 3, **common})
+    for index in range(3):
+        client.post("/api/assets", json={"name": f"Adopt clip {index}", "asset_type": "pain_point", "duration": 3, **common})
     client.post("/api/scripts", json={"title": "Adopt hook", "script_type": "pain_point", "duration": 20, **common})
     client.post("/api/templates", json={"name": "Adopt flow", "template_type": "pain_point", "recommended_duration": 20, **common})
     response = client.post("/api/assistant/adopt", json={"market_id": common["market_id"], "product_id": common["product_id"], "content_type": "pain_point", "duration": 20, "keywords": ["adopt"], "plan_index": 0})
     assert response.status_code == 201
     project = response.json()["project"]
-    assert project["id"] and project["timeline"] and response.json()["plan"]["score_breakdown"]
+    assert project["id"] and len(project["timeline"]) == 3 and response.json()["plan"]["score_breakdown"]
+    assert response.json()["plan"]["timeline"][-1]["end_second"] == 20
+
+
+def test_clone_duration_filters_and_video_upload(clean_database):
+    short = client.post("/api/assets", json={"name": "Short", "duration": 5, **clean_database}).json()
+    client.post("/api/assets", json={"name": "Long", "duration": 30, **clean_database})
+    filtered = client.get("/api/assets", params={"duration_min": 4, "duration_max": 10}).json()
+    assert [row["id"] for row in filtered] == [short["id"]]
+    project = client.post("/api/mix-projects", json={"name": "Original", "target_duration": 10, **clean_database}).json()
+    client.put(f"/api/mix-projects/{project['id']}/timeline", json=[{"mix_project_id": project["id"], "asset_id": short["id"], "start_second": 0, "end_second": 5}])
+    clone = client.post(f"/api/mix-projects/{project['id']}/clone")
+    assert clone.status_code == 201 and clone.json()["name"] == "Original - 副本" and len(clone.json()["timeline"]) == 1
+    video = client.post("/api/videos", json={"title": "Uploaded", "mix_project_id": clone.json()["id"]}).json()
+    uploaded = client.post(f"/api/videos/{video['id']}/file", files={"file": ("result.webm", b"test-video", "video/webm")})
+    assert uploaded.status_code == 200 and uploaded.json()["file_path"].endswith(".webm")
 
 
 def test_mix_project_timeline_and_video_lineage(clean_database):

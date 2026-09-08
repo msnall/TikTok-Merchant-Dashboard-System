@@ -2,7 +2,7 @@
   <div class="page workspace">
     <div class="workspace-head">
       <div><span class="eyebrow">MIX PROJECT WORKSPACE</span><h1>{{ isEditing ? '混剪方案详情' : '创建混剪方案' }}</h1></div>
-      <div class="workspace-actions"><el-button @click="$router.push('/mix-projects')">返回列表</el-button><el-button type="primary" :loading="saving" @click="saveProject">保存方案</el-button></div>
+      <div class="workspace-actions"><el-button @click="$router.push('/mix-projects')">返回列表</el-button><el-button v-if="isEditing" :loading="cloning" @click="cloneProject">克隆方案</el-button><el-button type="primary" :loading="saving" @click="saveProject">保存方案</el-button></div>
     </div>
 
     <el-form :model="form" label-position="top" class="workspace-form">
@@ -22,6 +22,7 @@
         <el-table-column label="用途" width="150"><template #default="scope"><el-input v-model="scope.row.usage_type" placeholder="hook / demo" /></template></el-table-column>
         <el-table-column label="开始（秒）" width="150"><template #default="scope"><el-input-number v-model="scope.row.start_second" :min="0" :precision="1" /></template></el-table-column>
         <el-table-column label="结束（秒）" width="150"><template #default="scope"><el-input-number v-model="scope.row.end_second" :min="0.1" :precision="1" /></template></el-table-column>
+        <el-table-column label="顺序" width="130"><template #default="scope"><el-button link :disabled="scope.$index === 0" @click="moveTimeline(scope.$index, -1)">上移</el-button><el-button link :disabled="scope.$index === timeline.length - 1" @click="moveTimeline(scope.$index, 1)">下移</el-button></template></el-table-column>
         <el-table-column label="操作" width="90"><template #default="scope"><el-button link type="danger" @click="timeline.splice(scope.$index, 1)">移除</el-button></template></el-table-column>
       </el-table>
       <p class="helper">时间轴会校验开始时间不小于 0、结束时间大于开始时间且不超过目标时长。</p>
@@ -43,7 +44,7 @@ import { ElMessage } from 'element-plus';
 const route = useRoute(); const router = useRouter();
 const projectId = computed(() => Number(route.params.id) || null); const isEditing = computed(() => Boolean(projectId.value));
 const form = ref<any>({ name: '', market_id: null, product_id: null, script_id: null, template_id: null, target_duration: 20, status: 'draft' });
-const markets = ref<any[]>([]), products = ref<any[]>([]), scripts = ref<any[]>([]), templates = ref<any[]>([]), assets = ref<any[]>([]), videos = ref<any[]>([]), timeline = ref<any[]>([]), saving = ref(false);
+const markets = ref<any[]>([]), products = ref<any[]>([]), scripts = ref<any[]>([]), templates = ref<any[]>([]), assets = ref<any[]>([]), videos = ref<any[]>([]), timeline = ref<any[]>([]), saving = ref(false), cloning = ref(false);
 
 async function load() {
   const [marketResult, productResult, scriptResult, templateResult, assetResult] = await Promise.all([
@@ -59,6 +60,7 @@ async function load() {
   }
 }
 function addAsset() { const first = assets.value.find(item => !timeline.value.some(row => row.asset_id === item.id)) || assets.value[0]; if (first) { const start = timeline.value.length ? timeline.value[timeline.value.length - 1].end_second : 0; timeline.value.push({ asset_id: first.id, order_index: timeline.value.length, start_second: start, end_second: Math.min(start + 3, form.value.target_duration), usage_type: 'product' }); } }
+function moveTimeline(index: number, offset: number) { const target = index + offset; if (target < 0 || target >= timeline.value.length) return; const currentAsset = timeline.value[index].asset_id, currentUsage = timeline.value[index].usage_type; timeline.value[index].asset_id = timeline.value[target].asset_id; timeline.value[index].usage_type = timeline.value[target].usage_type; timeline.value[target].asset_id = currentAsset; timeline.value[target].usage_type = currentUsage; }
 async function saveProject() {
   if (!form.value.name?.trim()) return ElMessage.warning('请填写方案名称'); saving.value = true;
   try {
@@ -67,5 +69,6 @@ async function saveProject() {
   } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '保存失败，请检查时间轴'); } finally { saving.value = false; }
 }
 async function createVideo() { if (!projectId.value) return; try { await axios.post('/api/videos', { title: `${form.value.name} 成片`, mix_project_id: projectId.value, market_id: form.value.market_id, product_id: form.value.product_id, duration: form.value.target_duration }); videos.value = (await axios.get('/api/videos', { params: { mix_project_id: projectId.value } })).data; ElMessage.success('已创建 VideoWork'); } catch { ElMessage.error('创建成片失败'); } }
+async function cloneProject() { if (!projectId.value) return; cloning.value = true; try { const clone = (await axios.post(`/api/mix-projects/${projectId.value}/clone`)).data; ElMessage.success('方案及时间轴已克隆'); await router.push(`/mix-projects/${clone.id}`); await load(); } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '克隆失败'); } finally { cloning.value = false; } }
 onMounted(load);
 </script>
