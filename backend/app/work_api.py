@@ -11,6 +11,7 @@ from .work_schemas import TASK_PRIORITIES, TASK_STATUSES, TASK_TYPES, WorkTaskPa
 from .work_services import ensure_daily_tasks
 
 router = APIRouter(prefix="/api/work-tasks", tags=["work-tasks"])
+legacy_router = APIRouter(prefix="/api/workbench/tasks", tags=["work-tasks"])
 
 
 def _validate_values(payload):
@@ -26,7 +27,7 @@ def _validate_values(payload):
 def list_tasks(task_date: date | None = Query(None), status: str | None = None, priority: str | None = None, db: Session = Depends(get_db)):
     target = task_date or date.today()
     ensure_daily_tasks(db, target)
-    stmt = select(WorkTask).where(WorkTask.task_date == target).order_by(WorkTask.due_at, WorkTask.id)
+    stmt = select(WorkTask).where(WorkTask.task_date == target, WorkTask.is_archived.is_(False)).order_by(WorkTask.due_at, WorkTask.id)
     if status:
         if status not in TASK_STATUSES:
             raise HTTPException(422, "不支持的任务状态")
@@ -56,7 +57,7 @@ def create_task(payload: WorkTaskPayload, db: Session = Depends(get_db)):
 @router.get("/{task_id}")
 def get_task(task_id: int, db: Session = Depends(get_db)):
     item = db.get(WorkTask, task_id)
-    if not item:
+    if not item or item.is_archived:
         raise HTTPException(404, "任务不存在")
     return serialize(item)
 
@@ -64,7 +65,7 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
 @router.put("/{task_id}")
 def update_task(task_id: int, payload: WorkTaskPayload, db: Session = Depends(get_db)):
     item = db.get(WorkTask, task_id)
-    if not item:
+    if not item or item.is_archived:
         raise HTTPException(404, "任务不存在")
     _validate_values(payload)
     for key, value in payload.model_dump().items():
@@ -83,7 +84,7 @@ def update_task_status(task_id: int, payload: WorkTaskStatusPayload, db: Session
     if payload.status not in TASK_STATUSES:
         raise HTTPException(422, "不支持的任务状态")
     item = db.get(WorkTask, task_id)
-    if not item:
+    if not item or item.is_archived:
         raise HTTPException(404, "任务不存在")
     item.status = payload.status
     item.notes = payload.notes if payload.notes is not None else item.notes
@@ -98,5 +99,28 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     item = db.get(WorkTask, task_id)
     if not item:
         raise HTTPException(404, "任务不存在")
-    db.delete(item)
+    if item.source == "manual":
+        db.delete(item)
+    else:
+        item.is_archived = True
     db.commit()
+
+
+@legacy_router.get("")
+def legacy_list_tasks(task_date: date | None = Query(None), status: str | None = None, priority: str | None = None, db: Session = Depends(get_db)):
+    return list_tasks(task_date=task_date, status=status, priority=priority, db=db)
+
+
+@legacy_router.post("", status_code=201)
+def legacy_create_task(payload: WorkTaskPayload, db: Session = Depends(get_db)):
+    return create_task(payload, db)
+
+
+@legacy_router.patch("/{task_id}")
+def legacy_update_task(task_id: int, payload: WorkTaskStatusPayload, db: Session = Depends(get_db)):
+    return update_task_status(task_id, payload, db)
+
+
+@legacy_router.delete("/{task_id}", status_code=204)
+def legacy_delete_task(task_id: int, db: Session = Depends(get_db)):
+    return delete_task(task_id, db)

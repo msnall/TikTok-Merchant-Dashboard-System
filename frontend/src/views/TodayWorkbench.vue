@@ -7,17 +7,18 @@
         <p>{{ data.date || '今日' }} · 固定运营 SOP、广告异常和内容交付任务。</p>
       </div>
       <div class="intro-actions">
+        <el-button @click="customDialog = true">新增任务</el-button>
         <el-button @click="refresh">刷新任务</el-button>
         <el-button type="primary" @click="generate">生成今日任务</el-button>
       </div>
     </div>
 
     <div class="work-summary">
-      <div><span>全部任务</span><strong>{{ tasks.length }}</strong></div>
-      <div><span>待处理</span><strong>{{ countBy('pending') }}</strong></div>
-      <div><span>进行中</span><strong>{{ countBy('in_progress') }}</strong></div>
-      <div><span>已完成</span><strong>{{ countBy('completed') }}</strong></div>
-      <div><span>高优先级</span><strong>{{ countPriority('high') }}</strong></div>
+      <div><span>全部任务</span><strong>{{ data.task_summary?.total ?? tasks.length }}</strong></div>
+      <div><span>待处理</span><strong>{{ data.task_summary?.pending ?? countBy('pending') }}</strong></div>
+      <div><span>进行中</span><strong>{{ data.task_summary?.in_progress ?? countBy('in_progress') }}</strong></div>
+      <div><span>已完成</span><strong>{{ data.task_summary?.completed ?? countBy('completed') }}</strong></div>
+      <div><span>完成率</span><strong>{{ data.task_summary?.completion_rate ?? 0 }}%</strong></div>
     </div>
 
     <section class="workspace-panel">
@@ -34,11 +35,12 @@
       </div>
       <el-table v-loading="loading" :data="tasks" stripe empty-text="今天还没有任务">
         <el-table-column label="时间" width="90"><template #default="scope">{{ dueTime(scope.row.due_at) }}</template></el-table-column>
-        <el-table-column prop="title" label="任务" min-width="240" />
+        <el-table-column label="任务" min-width="240"><template #default="scope"><el-button v-if="scope.row.related_id" link type="primary" @click="openRelated(scope.row)">{{ scope.row.title }}</el-button><span v-else>{{ scope.row.title }}</span></template></el-table-column>
         <el-table-column label="来源" width="100"><template #default="scope">{{ sourceLabel(scope.row.source) }}</template></el-table-column>
         <el-table-column label="优先级" width="90"><template #default="scope"><el-tag :type="priorityType(scope.row.priority)" size="small">{{ priorityLabel(scope.row.priority) }}</el-tag></template></el-table-column>
         <el-table-column label="状态" width="130"><template #default="scope"><el-select :model-value="scope.row.status" size="small" @change="value => updateStatus(scope.row, value)"><el-option label="待处理" value="pending" /><el-option label="进行中" value="in_progress" /><el-option label="已完成" value="completed" /><el-option label="已跳过" value="skipped" /></el-select></template></el-table-column>
         <el-table-column label="说明" min-width="260"><template #default="scope">{{ scope.row.description || '人工完成后更新状态' }}</template></el-table-column>
+        <el-table-column label="操作" width="130"><template #default="scope"><el-button v-if="scope.row.source === 'manual'" link @click="editTask(scope.row)">编辑</el-button><el-button link type="danger" @click="removeTask(scope.row)">删除</el-button></template></el-table-column>
       </el-table>
     </section>
 
@@ -54,6 +56,14 @@
         <el-empty v-if="!data.ad_alerts?.length" description="暂无广告提醒" :image-size="50" />
       </section>
     </div>
+    <el-dialog v-model="customDialog" title="新增运营任务" width="520px">
+      <el-form :model="customForm" label-width="90px">
+        <el-form-item label="任务标题"><el-input v-model="customForm.title" placeholder="例如：联系供应商确认库存" /></el-form-item>
+        <el-form-item label="优先级"><el-select v-model="customForm.priority"><el-option label="高" value="high" /><el-option label="中" value="medium" /><el-option label="低" value="low" /></el-select></el-form-item>
+        <el-form-item label="备注"><el-input v-model="customForm.notes" type="textarea" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="customDialog = false">取消</el-button><el-button type="primary" @click="saveCustomTask">保存</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
@@ -61,7 +71,7 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
 const loading = ref(false)
@@ -69,6 +79,9 @@ const tasks = ref<any[]>([])
 const data = ref<any>({})
 const statusFilter = ref<string | undefined>()
 const priorityFilter = ref<string | undefined>()
+const customDialog = ref(false)
+const editingTaskId = ref<number | null>(null)
+const customForm = ref<any>({ title: '', priority: 'medium', notes: '' })
 const countBy = (status: string) => tasks.value.filter(item => item.status === status).length
 const countPriority = (priority: string) => tasks.value.filter(item => item.priority === priority).length
 const dueTime = (value: string | null) => value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'
@@ -104,6 +117,57 @@ async function updateStatus(task: any, status: string) {
     ElMessage.success('任务状态已保存')
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '状态保存失败')
+  }
+}
+
+async function saveCustomTask() {
+  if (!customForm.value.title.trim()) {
+    ElMessage.warning('请填写任务标题')
+    return
+  }
+  try {
+    const payload = {
+      title: customForm.value.title,
+      description: customForm.value.notes || null,
+      task_type: 'content_task',
+      status: 'pending',
+      priority: customForm.value.priority,
+      task_date: data.value.date || new Date().toISOString().slice(0, 10),
+      source: 'manual',
+      notes: customForm.value.notes || null,
+    }
+    if (editingTaskId.value) await axios.put(`/api/work-tasks/${editingTaskId.value}`, { ...payload, status: 'pending' })
+    else await axios.post('/api/work-tasks', payload)
+    customDialog.value = false
+    editingTaskId.value = null
+    customForm.value = { title: '', priority: 'medium', notes: '' }
+    await refresh()
+    ElMessage.success('任务已创建')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '任务创建失败')
+  }
+}
+
+function editTask(task: any) {
+  editingTaskId.value = task.id
+  customForm.value = { title: task.title, priority: task.priority, notes: task.notes || task.description || '' }
+  customDialog.value = true
+}
+
+function openRelated(task: any) {
+  if (task.related_type === 'ad_plan') router.push('/ads')
+  else if (task.related_type === 'mix_project') router.push(`/mix-projects/${task.related_id}`)
+  else if (task.related_type === 'video_work') router.push(`/videos/${task.related_id}`)
+}
+
+async function removeTask(task: any) {
+  try {
+    await ElMessageBox.confirm(`确定删除“${task.title}”吗？`, '删除任务', { type: 'warning' })
+    await axios.delete(`/api/work-tasks/${task.id}`)
+    await refresh()
+    ElMessage.success('任务已删除')
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.response?.data?.detail || '删除失败')
   }
 }
 

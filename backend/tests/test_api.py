@@ -187,6 +187,8 @@ def test_workbench_and_operation_record_validation(clean_database):
     created = client.post("/api/operations", json={"ad_plan_id": plan["id"], "operation_type": "direct_stop", "reason": "empty burn"})
     assert created.status_code == 201
     assert client.get("/api/operations", params={"ad_plan_id": plan["id"]}).json()[0]["operation_type"] == "direct_stop"
+    updated = client.put(f"/api/operations/{created.json()['id']}", json={"ad_plan_id": plan["id"], "operation_type": "rebuild_target_roi", "old_target_roi": 2, "new_target_roi": 2.4, "reason": "updated"})
+    assert updated.status_code == 200 and updated.json()["new_target_roi"] == 2.4
 
 
 def test_daily_work_tasks_are_persisted_and_idempotent(clean_database):
@@ -206,6 +208,17 @@ def test_daily_work_tasks_are_persisted_and_idempotent(clean_database):
     assert updated.status_code == 200 and updated.json()["completed_at"]
     assert client.get(f"/api/work-tasks/{task_id}").json()["status"] == "completed"
     assert client.patch(f"/api/work-tasks/{task_id}/status", json={"status": "bad"}).status_code == 422
+    summary = client.get("/api/workbench/today", params={"task_date": "2026-09-09"}).json()["task_summary"]
+    assert summary["total"] >= 13 and summary["completion_rate"] == round(100 / summary["total"], 2)
+
+    assert client.delete(f"/api/work-tasks/{task_id}").status_code == 204
+    regenerated = client.get("/api/work-tasks", params={"task_date": "2026-09-09"}).json()
+    assert not any(item["id"] == task_id for item in regenerated)
+    assert len([item for item in regenerated if item["source"] == "sop"]) == 12
+
+    manual = client.post("/api/work-tasks", json={"title": "Temporary task", "task_type": "content_task", "task_date": "2026-09-09", "source": "manual"}).json()
+    assert client.delete(f"/api/work-tasks/{manual['id']}").status_code == 204
+    assert client.get(f"/api/work-tasks/{manual['id']}").status_code == 404
 
 
 def test_workbench_returns_persisted_tasks_for_requested_date(clean_database):
@@ -215,3 +228,4 @@ def test_workbench_returns_persisted_tasks_for_requested_date(clean_database):
     assert data["date"] == "2026-09-10"
     assert len(data["tasks"]) >= 13
     assert all("id" in item and "priority" in item for item in data["tasks"])
+    assert "completion_rate" in data["task_summary"]

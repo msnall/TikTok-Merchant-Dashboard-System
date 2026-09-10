@@ -67,4 +67,4 @@ def ensure_daily_tasks(db: Session, task_date: date) -> list[WorkTask]:
                             related_type="video_work", related_id=video.id))
 
     db.commit()
-    return db.scalars(select(WorkTask).where(WorkTask.task_date == task_date).order_by(WorkTask.due_at, WorkTask.priority.desc(), WorkTask.id)).all()
+    return db.scalars(select(WorkTask).where(WorkTask.task_date == task_date, WorkTask.is_archived.is_(False)).order_by(WorkTask.due_at, WorkTask.priority.desc(), WorkTask.id)).all()

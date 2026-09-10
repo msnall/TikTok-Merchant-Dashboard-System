@@ -86,3 +86,11 @@ def delete_operation(operation_id: int, db: Session = Depends(get_db)):
     item = db.get(OperationRecord, operation_id)
     if not item: raise HTTPException(404, "运营记录不存在")
     db.delete(item); db.commit()
+
+@router.put("/operations/{operation_id}")
+def update_operation(operation_id: int, payload: OperationCreate, db: Session = Depends(get_db)):
+    item = db.get(OperationRecord, operation_id)
+    if not item: raise HTTPException(404, "运营记录不存在")
+    if not db.get(AdPlan, payload.ad_plan_id): raise HTTPException(404, "广告计划不存在")
+    for key, value in payload.model_dump().items(): setattr(item, key, value)
+    db.commit(); db.refresh(item); return serialize(item)
