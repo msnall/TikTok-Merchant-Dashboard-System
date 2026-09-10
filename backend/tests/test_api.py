@@ -214,6 +214,37 @@ def test_each_ad_plan_keeps_its_own_target_roi(clean_database):
     assert client.patch(f"/api/ads/plans/{plans['A']['id']}/variant", json={"strategy_code": "C"}).status_code == 422
 
 
+def test_product_variant_target_setting_applies_across_campaign_dates(clean_database):
+    a_setting = client.post("/api/ads/target-roi-settings", json={
+        "product_name": "微波炉蒸蛋器", "strategy_code": "A", "target_roi": 2.0,
+    })
+    b_setting = client.post("/api/ads/target-roi-settings", json={
+        "product_name": "微波炉蒸蛋器", "strategy_code": "B", "target_roi": 2.4,
+    })
+    assert a_setting.status_code == 201 and b_setting.status_code == 201
+    assert client.post("/api/ads/target-roi-settings", json={
+        "product_name": " 微波炉蒸蛋器 ", "strategy_code": "A", "target_roi": 3,
+    }).status_code == 409
+    rows = [
+        ("A*9.5微波炉蒸蛋器0.76", "", "", 1.5, 1, 3, 2.1, 10, "", "", ""),
+        ("A*9.7微波炉蒸蛋器0.82", "", "", 1.5, 1, 3, 2.1, 10, "", "", ""),
+        ("B*9.6微波炉蒸蛋器0.76", "", "", 1.5, 1, 3, 2.1, 10, "", "", ""),
+        ("B*9.8微波炉蒸蛋器0.82", "", "", 1.5, 1, 3, 2.1, 10, "", "", ""),
+    ]
+    assert client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")}).status_code == 201
+    plans = client.get("/api/ads/plans").json()
+    assert {item["target_roi"] for item in plans if item["strategy_code"] == "A"} == {2.0}
+    assert {item["target_roi"] for item in plans if item["strategy_code"] == "B"} == {2.4}
+    assert {item["current_status"] for item in plans if item["strategy_code"] == "A"} == {"roi_reached"}
+    assert {item["current_status"] for item in plans if item["strategy_code"] == "B"} == {"low_roi"}
+    updated = client.put(f"/api/ads/target-roi-settings/{a_setting.json()['id']}", json={
+        "product_name": "微波炉蒸蛋器", "strategy_code": "A", "target_roi": 2.2,
+    })
+    assert updated.status_code == 200 and updated.json()["affected_plans"] == 2
+    reloaded = client.get("/api/ads/plans").json()
+    assert {item["target_roi"] for item in reloaded if item["strategy_code"] == "A"} == {2.2}
+
+
 def test_zero_spend_becomes_alert_only_after_24_hours(clean_database):
     rows = [("A*9.7课桌挂钩0.23", "Indonesia", "", 0, 0, 0, 0, 10, "A", "", "")]
     imported = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")}).json()

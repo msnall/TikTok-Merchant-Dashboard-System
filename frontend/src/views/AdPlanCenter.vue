@@ -8,6 +8,7 @@
       </div>
       <div class="intro-actions">
         <el-button @click="load">刷新</el-button>
+        <el-button type="primary" plain @click="openSetting()">目标 ROI 配置</el-button>
         <label class="upload-button" :class="{ disabled: importing }">
           {{ importing ? '正在导入...' : '导入 Excel' }}
           <input type="file" accept=".xlsx,.xlsm,.csv" :disabled="importing" @change="importFile" />
@@ -16,6 +17,20 @@
     </div>
 
     <div v-if="importMessage" class="import-message">{{ importMessage }}</div>
+
+    <section class="workspace-panel roi-settings-panel">
+      <div class="section-head">
+        <div><h3>产品 A/B 目标 ROI</h3><span class="muted">先在这里配置。以后导入任何日期的同产品 A/B 计划，都会自动使用相同目标 ROI。</span></div>
+        <el-button type="primary" @click="openSetting()">新增配置</el-button>
+      </div>
+      <el-table :data="targetSettings" stripe empty-text="尚未配置目标 ROI，请先新增产品 A/B 配置">
+        <el-table-column prop="product_name" label="产品" min-width="200" />
+        <el-table-column prop="strategy_code" label="A/B" width="90" />
+        <el-table-column prop="target_roi" label="目标 ROI" width="120"><template #default="scope">{{ number(scope.row.target_roi) }}</template></el-table-column>
+        <el-table-column prop="updated_at" label="更新时间" width="180"><template #default="scope">{{ dateTime(scope.row.updated_at) }}</template></el-table-column>
+        <el-table-column label="操作" width="130"><template #default="scope"><el-button link @click="openSetting(scope.row)">编辑</el-button><el-button link type="danger" @click="removeSetting(scope.row)">删除</el-button></template></el-table-column>
+      </el-table>
+    </section>
 
     <div class="ad-summary">
       <div><span>广告计划</span><strong>{{ plans.length }}</strong></div>
@@ -29,7 +44,7 @@
       <div class="section-head ad-toolbar">
         <div>
           <h3>当前广告计划</h3>
-          <span class="muted">目标 ROI 按每条计划独立保存，A/B 计划互不覆盖。</span>
+          <span class="muted">目标 ROI 按“产品 + A/B”同步；日期不同不会改变目标值，A 与 B 仍可不同。</span>
         </div>
         <el-radio-group v-model="activeStatus" size="small">
           <el-radio-button v-for="item in statusOptions" :key="item.value" :value="item.value">
@@ -65,7 +80,7 @@
           <template #default="scope">
             <div class="roi-editor">
               <el-input-number v-model="targetDraft[scope.row.id]" :min="0" :precision="2" :step="0.1" controls-position="right" />
-              <el-button link type="primary" :loading="savingIds.includes(scope.row.id)" @click="saveTarget(scope.row)">保存</el-button>
+              <el-button link type="primary" :loading="savingIds.includes(scope.row.id)" @click="saveTarget(scope.row)">同步</el-button>
             </div>
           </template>
         </el-table-column>
@@ -124,18 +139,28 @@
         <el-table-column prop="reason" label="判断依据" min-width="230" />
       </el-table>
     </el-drawer>
+
+    <el-dialog v-model="settingDialog" :title="editingSettingId ? '编辑目标 ROI 配置' : '新增目标 ROI 配置'" width="480px">
+      <el-form :model="settingForm" label-width="100px">
+        <el-form-item label="产品名称"><el-input v-model="settingForm.product_name" placeholder="例如：微波炉蒸蛋器" /></el-form-item>
+        <el-form-item label="计划类型"><el-segmented v-model="settingForm.strategy_code" :options="['A', 'B']" /></el-form-item>
+        <el-form-item label="目标 ROI"><el-input-number v-model="settingForm.target_roi" :min="0.01" :precision="2" :step="0.1" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="settingDialog = false">取消</el-button><el-button type="primary" :loading="settingSaving" @click="saveSetting">保存配置</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
 const plans = ref<any[]>([])
 const batches = ref<any[]>([])
+const targetSettings = ref<any[]>([])
 const snapshots = ref<any[]>([])
 const selectedPlan = ref<any>(null)
 const snapshotDrawer = ref(false)
@@ -146,6 +171,10 @@ const activeStatus = ref('')
 const savingIds = ref<number[]>([])
 const targetDraft = ref<Record<number, number | null>>({})
 const variantDraft = ref<Record<number, 'A' | 'B' | null>>({})
+const settingDialog = ref(false)
+const settingSaving = ref(false)
+const editingSettingId = ref<number | null>(null)
+const settingForm = ref<any>({ product_name: '', strategy_code: 'A', target_roi: 2 })
 
 const statusOptions = [
   { label: '全部', value: '' },
@@ -177,11 +206,12 @@ const statusType = (status: string) => status === 'roi_reached' || status === 'n
 async function load() {
   loading.value = true
   try {
-    const [planResult, batchResult] = await Promise.all([
-      axios.get('/api/ads/plans'), axios.get('/api/ads/import-batches'),
+    const [planResult, batchResult, settingResult] = await Promise.all([
+      axios.get('/api/ads/plans'), axios.get('/api/ads/import-batches'), axios.get('/api/ads/target-roi-settings'),
     ])
     plans.value = planResult.data
     batches.value = batchResult.data
+    targetSettings.value = settingResult.data
     targetDraft.value = Object.fromEntries(plans.value.map((item) => [item.id, item.target_roi]))
     variantDraft.value = Object.fromEntries(plans.value.map((item) => [item.id, item.strategy_code]))
   } catch (error: any) {
@@ -218,7 +248,8 @@ async function saveTarget(plan: any) {
     const index = plans.value.findIndex((item) => item.id === plan.id)
     if (index >= 0) plans.value[index] = result
     targetDraft.value[plan.id] = result.target_roi
-    ElMessage.success('目标 ROI 已保存')
+    await load()
+    ElMessage.success('该产品同 A/B 类型的目标 ROI 已同步')
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '目标 ROI 保存失败')
   } finally {
@@ -246,6 +277,44 @@ async function saveVariant(plan: any) {
 
 function recordOperation(plan: any) {
   router.push({ path: '/operations', query: { ad_plan_id: String(plan.id) } })
+}
+
+function openSetting(setting?: any) {
+  editingSettingId.value = setting?.id || null
+  settingForm.value = setting
+    ? { product_name: setting.product_name, strategy_code: setting.strategy_code, target_roi: setting.target_roi }
+    : { product_name: '', strategy_code: 'A', target_roi: 2 }
+  settingDialog.value = true
+}
+
+async function saveSetting() {
+  if (!settingForm.value.product_name.trim()) {
+    ElMessage.warning('请填写产品名称')
+    return
+  }
+  settingSaving.value = true
+  try {
+    if (editingSettingId.value) await axios.put(`/api/ads/target-roi-settings/${editingSettingId.value}`, settingForm.value)
+    else await axios.post('/api/ads/target-roi-settings', settingForm.value)
+    ElMessage.success('目标 ROI 配置已保存并同步到已有计划')
+    settingDialog.value = false
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '目标 ROI 配置保存失败')
+  } finally {
+    settingSaving.value = false
+  }
+}
+
+async function removeSetting(setting: any) {
+  try {
+    await ElMessageBox.confirm(`确定删除“${setting.product_name} · ${setting.strategy_code}”的目标 ROI 配置吗？`, '确认删除', { type: 'warning' })
+    await axios.delete(`/api/ads/target-roi-settings/${setting.id}`)
+    ElMessage.success('配置已删除')
+    await load()
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.response?.data?.detail || '删除失败')
+  }
 }
 
 onMounted(load)

@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from .ad_models import AdImportBatch, AdPlan, AdPlanSnapshot, AdStrategy, OperationRecord
-from .ad_schemas import AdPlanCreate, AdPlanVariantUpdate, AdStrategyCreate, OperationCreate, TargetRoiUpdate
-from .ad_services import import_rows, latest_snapshot, parse_upload, recompute_plan_status
+from .ad_models import AdImportBatch, AdPlan, AdPlanSnapshot, AdStrategy, AdTargetRoiSetting, OperationRecord
+from .ad_schemas import AdPlanCreate, AdPlanVariantUpdate, AdStrategyCreate, AdTargetRoiSettingPayload, OperationCreate, TargetRoiUpdate
+from .ad_services import import_rows, latest_snapshot, normalize_product_name, parse_upload, recompute_plan_status
 from .db import get_db
 from .main_helpers import serialize
 from .models import Market, Product
@@ -16,6 +16,25 @@ def serialize_plan(item: AdPlan):
     snapshot = latest_snapshot(item)
     data["latest_snapshot"] = serialize(snapshot) if snapshot else None
     return data
+
+
+def apply_target_setting(db: Session, setting: AdTargetRoiSetting):
+    plans = db.scalars(select(AdPlan).where(AdPlan.strategy_code == setting.strategy_code)).all()
+    changed = 0
+    for plan in plans:
+        if plan.imported_product_name and normalize_product_name(plan.imported_product_name) == setting.product_key:
+            plan.target_roi = setting.target_roi
+            recompute_plan_status(plan)
+            changed += 1
+    return changed
+
+
+def clear_target_setting(db: Session, product_key: str, strategy_code: str):
+    plans = db.scalars(select(AdPlan).where(AdPlan.strategy_code == strategy_code)).all()
+    for plan in plans:
+        if plan.imported_product_name and normalize_product_name(plan.imported_product_name) == product_key:
+            plan.target_roi = None
+            recompute_plan_status(plan)
 
 @router.get("/ads/plans")
 def list_ad_plans(status: str | None = None, db: Session = Depends(get_db)):
@@ -52,8 +71,23 @@ def update_target_roi(plan_id: int, payload: TargetRoiUpdate, db: Session = Depe
     item = db.get(AdPlan, plan_id)
     if not item:
         raise HTTPException(404, "广告计划不存在")
-    item.target_roi = payload.target_roi
-    recompute_plan_status(item)
+    if item.imported_product_name and item.strategy_code in {"A", "B"} and payload.target_roi is not None:
+        product_key = normalize_product_name(item.imported_product_name)
+        setting = db.scalar(select(AdTargetRoiSetting).where(
+            AdTargetRoiSetting.product_key == product_key,
+            AdTargetRoiSetting.strategy_code == item.strategy_code,
+        ))
+        if setting is None:
+            setting = AdTargetRoiSetting(product_name=item.imported_product_name, product_key=product_key,
+                                         strategy_code=item.strategy_code, target_roi=payload.target_roi)
+            db.add(setting); db.flush()
+        else:
+            setting.product_name = item.imported_product_name
+            setting.target_roi = payload.target_roi
+        apply_target_setting(db, setting)
+    else:
+        item.target_roi = payload.target_roi
+        recompute_plan_status(item)
     db.commit(); db.refresh(item)
     return serialize_plan(item)
 
@@ -64,8 +98,78 @@ def update_plan_variant(plan_id: int, payload: AdPlanVariantUpdate, db: Session 
     if not item:
         raise HTTPException(404, "广告计划不存在")
     item.strategy_code = payload.strategy_code
+    setting = None
+    if item.imported_product_name and payload.strategy_code:
+        setting = db.scalar(select(AdTargetRoiSetting).where(
+            AdTargetRoiSetting.product_key == normalize_product_name(item.imported_product_name),
+            AdTargetRoiSetting.strategy_code == payload.strategy_code,
+        ))
+    item.target_roi = setting.target_roi if setting else None
+    recompute_plan_status(item)
     db.commit(); db.refresh(item)
     return serialize_plan(item)
+
+
+@router.get("/ads/target-roi-settings")
+def list_target_roi_settings(db: Session = Depends(get_db)):
+    stmt = select(AdTargetRoiSetting).order_by(AdTargetRoiSetting.product_name, AdTargetRoiSetting.strategy_code)
+    return [serialize(item) for item in db.scalars(stmt).all()]
+
+
+@router.post("/ads/target-roi-settings", status_code=201)
+def create_target_roi_setting(payload: AdTargetRoiSettingPayload, db: Session = Depends(get_db)):
+    product_name = payload.product_name.strip()
+    product_key = normalize_product_name(product_name)
+    existing = db.scalar(select(AdTargetRoiSetting).where(
+        AdTargetRoiSetting.product_key == product_key,
+        AdTargetRoiSetting.strategy_code == payload.strategy_code,
+    ))
+    if existing:
+        raise HTTPException(409, "该产品和 A/B 类型已经配置目标 ROI")
+    item = AdTargetRoiSetting(product_name=product_name, product_key=product_key,
+                              strategy_code=payload.strategy_code, target_roi=payload.target_roi)
+    db.add(item); db.flush()
+    affected_plans = apply_target_setting(db, item)
+    db.commit(); db.refresh(item)
+    data = serialize(item); data["affected_plans"] = affected_plans
+    return data
+
+
+@router.put("/ads/target-roi-settings/{setting_id}")
+def update_target_roi_setting(setting_id: int, payload: AdTargetRoiSettingPayload, db: Session = Depends(get_db)):
+    item = db.get(AdTargetRoiSetting, setting_id)
+    if not item:
+        raise HTTPException(404, "目标 ROI 配置不存在")
+    old_product_key = item.product_key
+    old_strategy_code = item.strategy_code
+    product_name = payload.product_name.strip()
+    product_key = normalize_product_name(product_name)
+    duplicate = db.scalar(select(AdTargetRoiSetting).where(
+        AdTargetRoiSetting.product_key == product_key,
+        AdTargetRoiSetting.strategy_code == payload.strategy_code,
+        AdTargetRoiSetting.id != setting_id,
+    ))
+    if duplicate:
+        raise HTTPException(409, "该产品和 A/B 类型已经配置目标 ROI")
+    if old_product_key != product_key or old_strategy_code != payload.strategy_code:
+        clear_target_setting(db, old_product_key, old_strategy_code)
+    item.product_name = product_name
+    item.product_key = product_key
+    item.strategy_code = payload.strategy_code
+    item.target_roi = payload.target_roi
+    affected_plans = apply_target_setting(db, item)
+    db.commit(); db.refresh(item)
+    data = serialize(item); data["affected_plans"] = affected_plans
+    return data
+
+
+@router.delete("/ads/target-roi-settings/{setting_id}", status_code=204)
+def delete_target_roi_setting(setting_id: int, db: Session = Depends(get_db)):
+    item = db.get(AdTargetRoiSetting, setting_id)
+    if not item:
+        raise HTTPException(404, "目标 ROI 配置不存在")
+    clear_target_setting(db, item.product_key, item.strategy_code)
+    db.delete(item); db.commit()
 
 @router.delete("/ads/plans/{plan_id}", status_code=204)
 def delete_ad_plan(plan_id: int, db: Session = Depends(get_db)):

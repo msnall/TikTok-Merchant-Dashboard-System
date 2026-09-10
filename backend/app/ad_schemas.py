@@ -27,6 +27,12 @@ class AdPlanVariantUpdate(AdPayload):
     strategy_code: Literal["A", "B"] | None
 
 
+class AdTargetRoiSettingPayload(AdPayload):
+    product_name: str = Field(min_length=1, max_length=255)
+    strategy_code: Literal["A", "B"]
+    target_roi: float = Field(gt=0)
+
+
 class AdStrategyCreate(AdPayload):
     product_id: int
     strategy_code: str = Field(default="A", min_length=1, max_length=20)

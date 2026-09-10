@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
-from .ad_models import AdPlan, AdPlanSnapshot
+from .ad_models import AdPlan, AdPlanSnapshot, AdTargetRoiSetting
 
 ALIASES = {
     "campaign_id": ["Campaign ID", "campaign_id", "广告计划 ID", "广告计划ID"],
@@ -49,6 +49,19 @@ def parse_plan_name(plan_name: str) -> tuple[str | None, str | None]:
     product_match = PLAN_PRODUCT_PATTERN.match(plan_name)
     product_name = product_match.group(1).strip() if product_match else None
     return (variant_match.group(1) if variant_match else None), (product_name or None)
+
+
+def normalize_product_name(product_name: str) -> str:
+    return re.sub(r"[\s\-_.]+", "", product_name).casefold()
+
+
+def find_target_setting(db, product_name: str | None, strategy_code: str | None):
+    if not product_name or strategy_code not in {"A", "B"}:
+        return None
+    return db.scalar(select(AdTargetRoiSetting).where(
+        AdTargetRoiSetting.product_key == normalize_product_name(product_name),
+        AdTargetRoiSetting.strategy_code == strategy_code,
+    ))
 
 
 def parse_upload(filename: str, content: bytes):
@@ -148,6 +161,9 @@ def import_rows(db, filename, rows, markets, products):
                 plan.strategy_code = strategy_code
         if plan.product_unit_price is None and imported_price is not None:
             plan.product_unit_price = imported_price
+        target_setting = find_target_setting(db, product_name or plan.imported_product_name, strategy_code or plan.strategy_code)
+        if target_setting:
+            plan.target_roi = target_setting.target_roi
         spend = _number(_find(row, "spend"), None)
         orders_value = _number(_find(row, "orders"), None)
         orders = int(orders_value) if orders_value is not None else None

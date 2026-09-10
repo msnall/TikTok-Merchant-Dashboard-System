@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -51,6 +51,18 @@ class AdPlanSnapshot(Base):
     recommendation: Mapped[str | None] = mapped_column(Text)
     ad_plan = relationship("AdPlan", back_populates="snapshots")
     import_batch = relationship("AdImportBatch", back_populates="snapshots")
+
+
+class AdTargetRoiSetting(Base):
+    __tablename__ = "ad_target_roi_settings"
+    __table_args__ = (UniqueConstraint("product_key", "strategy_code", name="uq_ad_target_roi_product_variant"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_name: Mapped[str] = mapped_column(String(255))
+    product_key: Mapped[str] = mapped_column(String(255), index=True)
+    strategy_code: Mapped[str] = mapped_column(String(1))
+    target_roi: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class AdStrategy(Base):
