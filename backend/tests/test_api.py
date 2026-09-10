@@ -1,5 +1,4 @@
 import os
-from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
@@ -8,8 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.db import Base, SessionLocal, engine
-from app.ad_models import AdPlan
+from app.db import Base, engine
 from app.ad_services import evaluate_snapshot, parse_plan_name
 
 
@@ -158,16 +156,18 @@ def _csv_file(rows):
 def test_ad_import_creates_snapshots_and_classifies_alerts(clean_database):
     rows = [
         ("Burn plan", "Indonesia", "Sunscreen", 120, 0, 0, 0, 200, "A", 50, 1.5),
+        ("Exploring plan", "Indonesia", "Sunscreen", 2, 0, 0, 0, 200, "A", 50, 1.5),
         ("Low ROI plan", "Indonesia", "Sunscreen", 10, 1, 10, 0.5, 200, "A", 50, 1.5),
-        ("Idle plan", "Indonesia", "Sunscreen", 0, 0, 0, "", 200, "A", 50, 1.5),
+        ("Idle plan", "Indonesia", "Sunscreen", 0, 0, 0, 0, 200, "A", 50, 1.5),
     ]
     response = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")})
     assert response.status_code == 201
-    assert response.json()["snapshots"] == 3
+    assert response.json()["snapshots"] == 4
     plans = {item["plan_name"]: item for item in client.get("/api/ads/plans").json()}
     assert plans["Burn plan"]["current_status"] == "empty_burn"
+    assert plans["Exploring plan"]["current_status"] == "exploring"
     assert plans["Low ROI plan"]["current_status"] == "target_roi_pending"
-    assert plans["Idle plan"]["current_status"] == "insufficient_data"
+    assert plans["Idle plan"]["current_status"] == "no_spend"
     updated = client.patch(f"/api/ads/plans/{plans['Low ROI plan']['id']}/target-roi", json={"target_roi": 1.5})
     assert updated.status_code == 200 and updated.json()["current_status"] == "low_roi"
     client.patch(f"/api/ads/plans/{plans['Burn plan']['id']}/target-roi", json={"target_roi": 2.7})
@@ -178,18 +178,15 @@ def test_ad_import_creates_snapshots_and_classifies_alerts(clean_database):
     assert client.get(f"/api/ads/plans/{plans['Burn plan']['id']}").json()["target_roi"] == 2.7
 
 
-def test_ad_rule_priority_missing_values_and_plan_name_parser():
-    now = datetime.utcnow()
-    plan = SimpleNamespace(target_roi=2.0, created_at=now - timedelta(hours=25))
-    assert evaluate_snapshot(plan, 0, 0, 0, now)[0] == "no_spend"
-    assert evaluate_snapshot(plan, 2.5, 0, 0, now)[0] == "empty_burn"
-    assert evaluate_snapshot(plan, 1.5, 1, 2.2, now)[0] == "roi_reached"
-    assert evaluate_snapshot(plan, 1.5, 1, 1.6, now)[0] == "low_roi"
-    assert evaluate_snapshot(plan, 1.5, 0, 0, now)[0] != "empty_burn"
-    assert evaluate_snapshot(plan, 3, 0, 0, now)[0] == "empty_burn"
-    assert evaluate_snapshot(plan, None, 0, 0, now)[0] == "insufficient_data"
-    assert evaluate_snapshot(plan, 1, None, 0, now)[0] == "insufficient_data"
-    assert evaluate_snapshot(SimpleNamespace(target_roi=None, created_at=now), 1, 1, 0, now)[0] == "target_roi_pending"
+def test_ad_rule_priority_and_plan_name_parser():
+    plan = SimpleNamespace(target_roi=2.0)
+    assert evaluate_snapshot(plan, 0, 0, 0)[0] == "no_spend"
+    assert evaluate_snapshot(plan, 2, 0, 0)[0] == "exploring"
+    assert evaluate_snapshot(plan, 2.01, 0, 0)[0] == "empty_burn"
+    assert evaluate_snapshot(plan, 1.5, 1, 2.2)[0] == "roi_reached"
+    assert evaluate_snapshot(plan, 1.5, 1, 1.6)[0] == "low_roi"
+    assert evaluate_snapshot(plan, 3, 0, 0)[0] == "empty_burn"
+    assert evaluate_snapshot(SimpleNamespace(target_roi=None), 1, 1, 0)[0] == "target_roi_pending"
     assert parse_plan_name("A*9.7微波炉蒸蛋器0.82") == ("A", "微波炉蒸蛋器")
     assert parse_plan_name("B*9.7接线端子0.36 0.47") == ("B", "接线端子")
     assert parse_plan_name("C*9.8微波炉蒸蛋器1.23")[0] is None
@@ -245,14 +242,10 @@ def test_product_variant_target_setting_applies_across_campaign_dates(clean_data
     assert {item["target_roi"] for item in reloaded if item["strategy_code"] == "A"} == {2.2}
 
 
-def test_zero_spend_becomes_alert_only_after_24_hours(clean_database):
+def test_zero_spend_is_report_period_alert_immediately(clean_database):
     rows = [("A*9.7课桌挂钩0.23", "Indonesia", "", 0, 0, 0, 0, 10, "A", "", "")]
     imported = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")}).json()
     plan_id = client.get("/api/ads/plans").json()[0]["id"]
-    assert client.get(f"/api/ads/plans/{plan_id}").json()["current_status"] == "insufficient_data"
-    with SessionLocal() as db:
-        db.get(AdPlan, plan_id).created_at = datetime.utcnow() - timedelta(hours=25)
-        db.commit()
     assert client.get(f"/api/ads/plans/{plan_id}").json()["current_status"] == "no_spend"
     workbench = client.get("/api/workbench/today").json()
     assert any(item["id"] == plan_id for item in workbench["ad_alerts"])
@@ -264,6 +257,12 @@ def test_ad_import_rejects_invalid_file(clean_database):
     assert response.status_code == 400
     broken = client.post("/api/ads/import", files={"file": ("ads.xlsx", b"not a workbook", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
     assert broken.status_code == 400
+    blank_roi = [("Missing ROI", "Indonesia", "Sunscreen", 1, 0, 0, "", 10, "A", 1, "")]
+    missing_value = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(blank_roi), "text/csv")})
+    assert missing_value.status_code == 400 and "ROI" in missing_value.json()["detail"]
+    missing_column = "广告计划,成本,订单\nPlan,1,0\n".encode("utf-8-sig")
+    missing_header = client.post("/api/ads/import", files={"file": ("ads.csv", missing_column, "text/csv")})
+    assert missing_header.status_code == 400 and "缺少必需列" in missing_header.json()["detail"]
 
 
 def test_non_alert_ad_statuses_do_not_enter_workbench(clean_database):

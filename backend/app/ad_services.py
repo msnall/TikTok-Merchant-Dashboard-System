@@ -2,7 +2,7 @@ import csv
 import io
 import re
 from zipfile import BadZipFile
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import select
 
@@ -21,7 +21,6 @@ ALIASES = {
 }
 
 ALERT_STATUSES = {"no_spend", "empty_burn", "low_roi"}
-NO_SPEND_WINDOW = timedelta(hours=24)
 EMPTY_BURN_THRESHOLD = 2.0
 PLAN_VARIANT_PATTERN = re.compile(r"^([AB])\*")
 PLAN_PRODUCT_PATTERN = re.compile(
@@ -41,6 +40,11 @@ def _find(row, key):
         value = normalized.get(re.sub(r"[\s_\-]", "", alias).lower())
         if value is not None: return value
     return None
+
+
+def _has_column(row, key):
+    normalized = {re.sub(r"[\s_\-]", "", str(column)).lower() for column in row}
+    return any(re.sub(r"[\s_\-]", "", alias).lower() in normalized for alias in ALIASES[key])
 
 
 def parse_plan_name(plan_name: str) -> tuple[str | None, str | None]:
@@ -83,25 +87,35 @@ def parse_upload(filename: str, content: bytes):
     raise ValueError("仅支持 .xlsx、.xlsm 或 .csv 文件")
 
 
-def evaluate_snapshot(ad_plan, spend, orders, actual_roi, observed_at: datetime | None = None):
-    observed_at = observed_at or datetime.utcnow()
-    if spend is None:
-        return "insufficient_data", "Excel 成本为空，暂时无法判断", "请检查导入数据"
-    if spend < 0:
-        return "insufficient_data", "Excel 成本不能为负数", "请检查导入数据"
+def validate_import_rows(rows):
+    required = {"plan_name": "广告计划名称", "spend": "成本", "orders": "SKU 订单数", "actual_roi": "ROI"}
+    missing = [label for key, label in required.items() if not _has_column(rows[0], key)]
+    if missing:
+        raise ValueError(f"Excel 缺少必需列：{'、'.join(missing)}")
+    for index, row in enumerate(rows, start=2):
+        if not str(_find(row, "plan_name") or "").strip():
+            raise ValueError(f"Excel 第 {index} 行广告计划名称为空")
+        values = {key: _number(_find(row, key), None) for key in ("spend", "orders", "actual_roi")}
+        empty = [required[key] for key, value in values.items() if value is None]
+        if empty:
+            raise ValueError(f"Excel 第 {index} 行{'、'.join(empty)}为空或不是数字")
+        if values["spend"] < 0 or values["orders"] < 0 or values["actual_roi"] < 0:
+            raise ValueError(f"Excel 第 {index} 行成本、SKU 订单数和 ROI 不能为负数")
+        if not values["orders"].is_integer():
+            raise ValueError(f"Excel 第 {index} 行 SKU 订单数必须是整数")
+
+
+def evaluate_snapshot(ad_plan, spend, orders, actual_roi):
+    if spend is None or orders is None or actual_roi is None or spend < 0 or orders < 0 or actual_roi < 0:
+        return "unknown", "历史快照数据不可用", "请重新导入完整的 TikTok Excel"
     if spend == 0:
-        first_seen_at = ad_plan.created_at
-        if first_seen_at and observed_at - first_seen_at >= NO_SPEND_WINDOW:
-            return "no_spend", "该计划自系统首次记录起已持续 24 小时无消耗", "建议检查计划状态，并考虑关停重建"
-        return "insufficient_data", "当前无消耗，但系统观察时间尚未达到 24 小时", "继续观察至满 24 小时"
-    if orders is None:
-        return "insufficient_data", "Excel SKU 订单数为空，暂时无法判断", "请检查导入数据"
-    if spend > EMPTY_BURN_THRESHOLD and orders == 0:
-        return "empty_burn", "成本已超过 $2，但 SKU 订单数为 0", "建议回 TikTok 后台检查对应广告视频，再决定是否关停或重建"
+        return "no_spend", "本次 Excel 报表周期内成本为 0", "建议回 TikTok 后台检查计划是否正常投放"
+    if orders == 0:
+        if spend > EMPTY_BURN_THRESHOLD:
+            return "empty_burn", "成本已超过 $2，但 SKU 订单数为 0", "建议回 TikTok 后台检查对应广告视频，再决定是否关停或重建"
+        return "exploring", "计划已有消耗，但成本未超过 $2 且暂未出单", "计划仍在消耗探索中，继续观察"
     if ad_plan.target_roi is None:
         return "target_roi_pending", "该广告计划尚未设置目标 ROI", "请为这条计划设置目标 ROI"
-    if actual_roi is None:
-        return "insufficient_data", "Excel ROI 为空，暂时无法判断", "请检查导入数据"
     if actual_roi >= ad_plan.target_roi:
         return "roi_reached", "当前 ROI 已达到目标 ROI", "可以继续关注，根据实际运营策略决定是否提高 ROI"
     return "low_roi", "当前 ROI 低于目标 ROI", "建议回 TikTok 后台查看对应视频数据，进一步判断问题原因"
@@ -111,12 +125,12 @@ def latest_snapshot(ad_plan: AdPlan) -> AdPlanSnapshot | None:
     return max(ad_plan.snapshots, key=lambda item: (item.snapshot_at or datetime.min, item.id), default=None)
 
 
-def recompute_plan_status(ad_plan: AdPlan, observed_at: datetime | None = None) -> AdPlanSnapshot | None:
+def recompute_plan_status(ad_plan: AdPlan) -> AdPlanSnapshot | None:
     snapshot = latest_snapshot(ad_plan)
     if snapshot is None:
         return None
     status, reason, recommendation = evaluate_snapshot(
-        ad_plan, snapshot.spend, snapshot.orders, snapshot.actual_roi, observed_at
+        ad_plan, snapshot.spend, snapshot.orders, snapshot.actual_roi
     )
     snapshot.status = status
     snapshot.reason = reason
@@ -127,6 +141,7 @@ def recompute_plan_status(ad_plan: AdPlan, observed_at: datetime | None = None) 
 
 def import_rows(db, filename, rows, markets, products):
     from .ad_models import AdImportBatch
+    validate_import_rows(rows)
     batch = AdImportBatch(file_name=filename, row_count=len(rows), status="completed"); db.add(batch); db.flush()
     for row in rows:
         name = str(_find(row, "plan_name") or "").strip()

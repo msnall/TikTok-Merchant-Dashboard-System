@@ -34,10 +34,10 @@
 
     <div class="ad-summary">
       <div><span>广告计划</span><strong>{{ plans.length }}</strong></div>
+      <div><span>报表期无消耗</span><strong>{{ statusCount('no_spend') }}</strong></div>
+      <div><span>消耗探索中</span><strong>{{ statusCount('exploring') }}</strong></div>
       <div><span>空烧</span><strong>{{ statusCount('empty_burn') }}</strong></div>
       <div><span>ROI 低于目标</span><strong>{{ statusCount('low_roi') }}</strong></div>
-      <div><span>ROI 达标</span><strong>{{ statusCount('roi_reached') }}</strong></div>
-      <div><span>待设置目标 ROI</span><strong>{{ statusCount('target_roi_pending') }}</strong></div>
     </div>
 
     <section class="workspace-panel ad-plan-panel">
@@ -120,9 +120,11 @@
       <section class="workspace-panel">
         <div class="section-head"><h3>判断边界</h3></div>
         <div class="rule-list">
-          <p><strong>24 小时无消耗</strong><span>从系统首次记录计划起计算</span></p>
+          <p><strong>报表期无消耗</strong><span>本次 Excel 中成本 = 0</span></p>
+          <p><strong>消耗探索中</strong><span>0 &lt; 成本 ≤ $2 且 SKU 订单数 = 0</span></p>
           <p><strong>疑似空烧</strong><span>成本 &gt; $2 且 SKU 订单数 = 0</span></p>
-          <p><strong>ROI 判断</strong><span>实际 ROI 与该计划目标 ROI 直接比较</span></p>
+          <p><strong>ROI 判断</strong><span>有订单后，实际 ROI 与该计划目标 ROI 直接比较</span></p>
+          <p><strong>当前预算</strong><span>只展示，不参与状态判断</span></p>
           <p><strong>人工决策</strong><span>系统不自动关停或修改 TikTok 广告</span></p>
         </div>
       </section>
@@ -178,12 +180,12 @@ const settingForm = ref<any>({ product_name: '', strategy_code: 'A', target_roi:
 
 const statusOptions = [
   { label: '全部', value: '' },
+  { label: '无消耗', value: 'no_spend' },
+  { label: '探索中', value: 'exploring' },
   { label: '空烧', value: 'empty_burn' },
   { label: 'ROI 低', value: 'low_roi' },
   { label: 'ROI 达标', value: 'roi_reached' },
-  { label: '24h 无消耗', value: 'no_spend' },
   { label: '待设目标', value: 'target_roi_pending' },
-  { label: '数据不足', value: 'insufficient_data' },
 ]
 
 const filteredPlans = computed(() => activeStatus.value
@@ -196,8 +198,8 @@ const number = (input: unknown) => input === null || input === undefined ? '-' :
 const money = (input: unknown) => input === null || input === undefined ? '-' : `$${Number(input).toFixed(2)}`
 const dateTime = (input: string | null | undefined) => input ? new Date(input).toLocaleString('zh-CN', { hour12: false }) : '-'
 const statusLabel = (status: string) => ({
-  empty_burn: '疑似空烧', low_roi: 'ROI 低于目标', roi_reached: 'ROI 达标', no_spend: '24 小时无消耗',
-  target_roi_pending: '待设置目标 ROI', insufficient_data: '数据不足', normal: '正常', unknown: '未知',
+  empty_burn: '疑似空烧', exploring: '消耗探索中', low_roi: 'ROI 低于目标', roi_reached: 'ROI 达标', no_spend: '报表期无消耗',
+  target_roi_pending: '待设置目标 ROI', normal: '正常', unknown: '未知',
 }[status] || status)
 const statusType = (status: string) => status === 'roi_reached' || status === 'normal' ? 'success'
   : status === 'empty_burn' || status === 'no_spend' ? 'danger'

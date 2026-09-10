@@ -194,7 +194,12 @@ async def import_ads(file: UploadFile = File(...), db: Session = Depends(get_db)
     try: rows = parse_upload(filename, await file.read())
     except ValueError as exc: raise HTTPException(400, str(exc)) from exc
     if not rows: raise HTTPException(400, "文件没有可导入的数据")
-    batch = import_rows(db, filename, rows, db.scalars(select(Market)).all(), db.scalars(select(Product)).all()); db.commit(); db.refresh(batch)
+    try:
+        batch = import_rows(db, filename, rows, db.scalars(select(Market)).all(), db.scalars(select(Product)).all())
+        db.commit(); db.refresh(batch)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from exc
     return {"batch": serialize(batch), "plans": len(db.scalars(select(AdPlan)).all()), "snapshots": len(batch.snapshots)}
 
 @router.get("/ad-strategies")
