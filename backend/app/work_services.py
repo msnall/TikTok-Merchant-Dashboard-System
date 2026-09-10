@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .ad_models import AdPlan
+from .ad_services import ALERT_STATUSES, latest_snapshot, recompute_plan_status
 from .models import MixProject, VideoWork
 from .work_models import WorkTask
 
@@ -45,10 +46,15 @@ def ensure_daily_tasks(db: Session, task_date: date) -> list[WorkTask]:
         db.add(WorkTask(title=title, description="人工运营任务，请在实际业务系统完成检查后更新状态。", task_type=task_type,
                         priority=priority, due_at=due_at, task_date=task_date, source="sop"))
 
-    alerts = db.scalars(select(AdPlan).where(AdPlan.current_status != "normal")).all()
+    plans = db.scalars(select(AdPlan)).all()
+    for plan in plans:
+        recompute_plan_status(plan)
+    alerts = [plan for plan in plans if plan.current_status in ALERT_STATUSES]
     for plan in alerts:
         if not _find_existing(db, task_date, "ad_alert", "system", plan.id):
-            db.add(WorkTask(title=f"检查广告计划：{plan.plan_name}", description="广告计划触发异常规则，请回 TikTok 后台确认。",
+            snapshot = latest_snapshot(plan)
+            description = snapshot.reason if snapshot and snapshot.reason else "广告计划触发异常规则，请回 TikTok 后台确认。"
+            db.add(WorkTask(title=f"检查广告计划：{plan.plan_name}", description=description,
                             task_type="ad_alert", priority="high", task_date=task_date, source="system",
                             related_type="ad_plan", related_id=plan.id))
 

@@ -2,19 +2,31 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from .ad_models import AdImportBatch, AdPlan, AdPlanSnapshot, AdStrategy, OperationRecord
-from .ad_schemas import AdPlanCreate, AdStrategyCreate, OperationCreate
-from .ad_services import import_rows, parse_upload
+from .ad_schemas import AdPlanCreate, AdPlanVariantUpdate, AdStrategyCreate, OperationCreate, TargetRoiUpdate
+from .ad_services import import_rows, latest_snapshot, parse_upload, recompute_plan_status
 from .db import get_db
 from .main_helpers import serialize
 from .models import Market, Product
 
 router = APIRouter(prefix="/api", tags=["advertising"])
 
+
+def serialize_plan(item: AdPlan):
+    data = serialize(item)
+    snapshot = latest_snapshot(item)
+    data["latest_snapshot"] = serialize(snapshot) if snapshot else None
+    return data
+
 @router.get("/ads/plans")
 def list_ad_plans(status: str | None = None, db: Session = Depends(get_db)):
     stmt = select(AdPlan).order_by(AdPlan.id.desc())
-    if status: stmt = stmt.where(AdPlan.current_status == status)
-    return [serialize(item) for item in db.scalars(stmt).all()]
+    items = db.scalars(stmt).all()
+    for item in items:
+        recompute_plan_status(item)
+    db.commit()
+    if status:
+        items = [item for item in items if item.current_status == status]
+    return [serialize_plan(item) for item in items]
 
 @router.post("/ads/plans", status_code=201)
 def create_ad_plan(payload: AdPlanCreate, db: Session = Depends(get_db)):
@@ -24,7 +36,8 @@ def create_ad_plan(payload: AdPlanCreate, db: Session = Depends(get_db)):
 def get_ad_plan(plan_id: int, db: Session = Depends(get_db)):
     item = db.get(AdPlan, plan_id)
     if not item: raise HTTPException(404, "广告计划不存在")
-    data = serialize(item); data["snapshots"] = [serialize(row) for row in sorted(item.snapshots, key=lambda row: row.snapshot_at, reverse=True)]; return data
+    recompute_plan_status(item); db.commit()
+    data = serialize_plan(item); data["snapshots"] = [serialize(row) for row in sorted(item.snapshots, key=lambda row: row.snapshot_at, reverse=True)]; return data
 
 @router.put("/ads/plans/{plan_id}")
 def update_ad_plan(plan_id: int, payload: AdPlanCreate, db: Session = Depends(get_db)):
@@ -32,6 +45,27 @@ def update_ad_plan(plan_id: int, payload: AdPlanCreate, db: Session = Depends(ge
     if not item: raise HTTPException(404, "广告计划不存在")
     for key, value in payload.model_dump().items(): setattr(item, key, value)
     db.commit(); db.refresh(item); return serialize(item)
+
+
+@router.patch("/ads/plans/{plan_id}/target-roi")
+def update_target_roi(plan_id: int, payload: TargetRoiUpdate, db: Session = Depends(get_db)):
+    item = db.get(AdPlan, plan_id)
+    if not item:
+        raise HTTPException(404, "广告计划不存在")
+    item.target_roi = payload.target_roi
+    recompute_plan_status(item)
+    db.commit(); db.refresh(item)
+    return serialize_plan(item)
+
+
+@router.patch("/ads/plans/{plan_id}/variant")
+def update_plan_variant(plan_id: int, payload: AdPlanVariantUpdate, db: Session = Depends(get_db)):
+    item = db.get(AdPlan, plan_id)
+    if not item:
+        raise HTTPException(404, "广告计划不存在")
+    item.strategy_code = payload.strategy_code
+    db.commit(); db.refresh(item)
+    return serialize_plan(item)
 
 @router.delete("/ads/plans/{plan_id}", status_code=204)
 def delete_ad_plan(plan_id: int, db: Session = Depends(get_db)):

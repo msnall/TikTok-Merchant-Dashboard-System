@@ -1,4 +1,6 @@
 import os
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
@@ -6,7 +8,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.db import Base, engine
+from app.db import Base, SessionLocal, engine
+from app.ad_models import AdPlan
+from app.ad_services import evaluate_snapshot, parse_plan_name
 
 
 client = TestClient(app)
@@ -162,17 +166,83 @@ def test_ad_import_creates_snapshots_and_classifies_alerts(clean_database):
     assert response.json()["snapshots"] == 3
     plans = {item["plan_name"]: item for item in client.get("/api/ads/plans").json()}
     assert plans["Burn plan"]["current_status"] == "empty_burn"
-    assert plans["Low ROI plan"]["current_status"] == "low_roi"
-    assert plans["Idle plan"]["current_status"] == "no_spend"
+    assert plans["Low ROI plan"]["current_status"] == "target_roi_pending"
+    assert plans["Idle plan"]["current_status"] == "insufficient_data"
+    updated = client.patch(f"/api/ads/plans/{plans['Low ROI plan']['id']}/target-roi", json={"target_roi": 1.5})
+    assert updated.status_code == 200 and updated.json()["current_status"] == "low_roi"
+    client.patch(f"/api/ads/plans/{plans['Burn plan']['id']}/target-roi", json={"target_roi": 2.7})
     second = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file([( "Burn plan", "Indonesia", "Sunscreen", 5, 1, 10, 2, 200, "A", 50, 1.5)]), "text/csv")})
     assert second.status_code == 201
     assert len(client.get("/api/ads/snapshots", params={"ad_plan_id": plans["Burn plan"]["id"]}).json()) == 2
     assert len(client.get("/api/ads/import-batches").json()) == 2
+    assert client.get(f"/api/ads/plans/{plans['Burn plan']['id']}").json()["target_roi"] == 2.7
+
+
+def test_ad_rule_priority_missing_values_and_plan_name_parser():
+    now = datetime.utcnow()
+    plan = SimpleNamespace(target_roi=2.0, created_at=now - timedelta(hours=25))
+    assert evaluate_snapshot(plan, 0, 0, 0, now)[0] == "no_spend"
+    assert evaluate_snapshot(plan, 2.5, 0, 0, now)[0] == "empty_burn"
+    assert evaluate_snapshot(plan, 1.5, 1, 2.2, now)[0] == "roi_reached"
+    assert evaluate_snapshot(plan, 1.5, 1, 1.6, now)[0] == "low_roi"
+    assert evaluate_snapshot(plan, 1.5, 0, 0, now)[0] != "empty_burn"
+    assert evaluate_snapshot(plan, 3, 0, 0, now)[0] == "empty_burn"
+    assert evaluate_snapshot(plan, None, 0, 0, now)[0] == "insufficient_data"
+    assert evaluate_snapshot(plan, 1, None, 0, now)[0] == "insufficient_data"
+    assert evaluate_snapshot(SimpleNamespace(target_roi=None, created_at=now), 1, 1, 0, now)[0] == "target_roi_pending"
+    assert parse_plan_name("A*9.7微波炉蒸蛋器0.82") == ("A", "微波炉蒸蛋器")
+    assert parse_plan_name("B*9.7接线端子0.36 0.47") == ("B", "接线端子")
+    assert parse_plan_name("C*9.8微波炉蒸蛋器1.23")[0] is None
+
+
+def test_each_ad_plan_keeps_its_own_target_roi(clean_database):
+    rows = [
+        ("A*9.7微波炉蒸蛋器0.82", "Indonesia", "", 1.5, 1, 3, 2.0, 10, "A", "", 99),
+        ("B*9.7微波炉蒸蛋器0.82", "Indonesia", "", 1.5, 1, 3, 2.0, 10, "B", "", 88),
+    ]
+    assert client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")}).status_code == 201
+    plans = {item["strategy_code"]: item for item in client.get("/api/ads/plans").json()}
+    assert plans["A"]["target_roi"] is None and plans["B"]["target_roi"] is None
+    assert client.patch(f"/api/ads/plans/{plans['A']['id']}/target-roi", json={"target_roi": 2.0}).status_code == 200
+    assert client.patch(f"/api/ads/plans/{plans['B']['id']}/target-roi", json={"target_roi": 2.4}).status_code == 200
+    reloaded = {item["strategy_code"]: item for item in client.get("/api/ads/plans").json()}
+    assert reloaded["A"]["target_roi"] == 2.0
+    assert reloaded["B"]["target_roi"] == 2.4
+    assert reloaded["A"]["current_status"] == "roi_reached"
+    assert reloaded["B"]["current_status"] == "low_roi"
+    assert client.patch(f"/api/ads/plans/{plans['A']['id']}/variant", json={"strategy_code": "B"}).json()["strategy_code"] == "B"
+    assert client.patch(f"/api/ads/plans/{plans['A']['id']}/variant", json={"strategy_code": "C"}).status_code == 422
+
+
+def test_zero_spend_becomes_alert_only_after_24_hours(clean_database):
+    rows = [("A*9.7课桌挂钩0.23", "Indonesia", "", 0, 0, 0, 0, 10, "A", "", "")]
+    imported = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")}).json()
+    plan_id = client.get("/api/ads/plans").json()[0]["id"]
+    assert client.get(f"/api/ads/plans/{plan_id}").json()["current_status"] == "insufficient_data"
+    with SessionLocal() as db:
+        db.get(AdPlan, plan_id).created_at = datetime.utcnow() - timedelta(hours=25)
+        db.commit()
+    assert client.get(f"/api/ads/plans/{plan_id}").json()["current_status"] == "no_spend"
+    workbench = client.get("/api/workbench/today").json()
+    assert any(item["id"] == plan_id for item in workbench["ad_alerts"])
+    assert imported["snapshots"] == 1
 
 
 def test_ad_import_rejects_invalid_file(clean_database):
     response = client.post("/api/ads/import", files={"file": ("ads.pdf", b"not supported", "application/pdf")})
     assert response.status_code == 400
+    broken = client.post("/api/ads/import", files={"file": ("ads.xlsx", b"not a workbook", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert broken.status_code == 400
+
+
+def test_non_alert_ad_statuses_do_not_enter_workbench(clean_database):
+    pending = client.post("/api/ads/plans", json={"plan_name": "Pending target", "current_status": "target_roi_pending"}).json()
+    reached = client.post("/api/ads/plans", json={"plan_name": "Reached target", "current_status": "roi_reached"}).json()
+    workbench = client.get("/api/workbench/today").json()
+    alert_ids = {item["id"] for item in workbench["ad_alerts"]}
+    assert pending["id"] not in alert_ids and reached["id"] not in alert_ids
+    task_ids = {item["related_id"] for item in workbench["tasks"] if item["task_type"] == "ad_alert"}
+    assert pending["id"] not in task_ids and reached["id"] not in task_ids
 
 
 def test_workbench_and_operation_record_validation(clean_database):

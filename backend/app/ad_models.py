@@ -18,7 +18,9 @@ class AdImportBatch(Base):
 class AdPlan(Base):
     __tablename__ = "ad_plans"
     id: Mapped[int] = mapped_column(primary_key=True)
+    platform_campaign_id: Mapped[str | None] = mapped_column(String(64), index=True)
     plan_name: Mapped[str] = mapped_column(String(255), index=True)
+    imported_product_name: Mapped[str | None] = mapped_column(String(255))
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"))
     market_id: Mapped[int | None] = mapped_column(ForeignKey("markets.id", ondelete="SET NULL"))
     strategy_code: Mapped[str | None] = mapped_column(String(20))
@@ -39,9 +41,9 @@ class AdPlanSnapshot(Base):
     ad_plan_id: Mapped[int] = mapped_column(ForeignKey("ad_plans.id", ondelete="CASCADE"))
     import_batch_id: Mapped[int] = mapped_column(ForeignKey("ad_import_batches.id", ondelete="CASCADE"))
     snapshot_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    spend: Mapped[float] = mapped_column(Float, default=0)
-    orders: Mapped[int] = mapped_column(Integer, default=0)
-    revenue: Mapped[float] = mapped_column(Float, default=0)
+    spend: Mapped[float | None] = mapped_column(Float)
+    orders: Mapped[int | None] = mapped_column(Integer)
+    revenue: Mapped[float | None] = mapped_column(Float)
     actual_roi: Mapped[float | None] = mapped_column(Float)
     budget: Mapped[float | None] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(40), default="unknown")

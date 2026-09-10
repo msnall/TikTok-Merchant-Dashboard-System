@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -6,13 +8,23 @@ class AdPayload(BaseModel):
 
 
 class AdPlanCreate(AdPayload):
+    platform_campaign_id: str | None = Field(default=None, max_length=64)
     plan_name: str = Field(min_length=1, max_length=255)
+    imported_product_name: str | None = Field(default=None, max_length=255)
     product_id: int | None = None
     market_id: int | None = None
     strategy_code: str | None = None
     current_status: str = "unknown"
     target_roi: float | None = None
     product_unit_price: float | None = None
+
+
+class TargetRoiUpdate(AdPayload):
+    target_roi: float | None = Field(ge=0)
+
+
+class AdPlanVariantUpdate(AdPayload):
+    strategy_code: Literal["A", "B"] | None
 
 
 class AdStrategyCreate(AdPayload):
