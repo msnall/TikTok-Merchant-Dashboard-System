@@ -242,13 +242,18 @@ def test_product_variant_target_setting_applies_across_campaign_dates(clean_data
     assert {item["target_roi"] for item in reloaded if item["strategy_code"] == "A"} == {2.2}
 
 
-def test_zero_spend_is_report_period_alert_immediately(clean_database):
+def test_zero_spend_is_not_added_to_workbench_reminders(clean_database):
     rows = [("A*9.7课桌挂钩0.23", "Indonesia", "", 0, 0, 0, 0, 10, "A", "", "")]
     imported = client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")}).json()
     plan_id = client.get("/api/ads/plans").json()[0]["id"]
     assert client.get(f"/api/ads/plans/{plan_id}").json()["current_status"] == "no_spend"
     workbench = client.get("/api/workbench/today").json()
-    assert any(item["id"] == plan_id for item in workbench["ad_alerts"])
+    assert all(item["id"] != plan_id for item in workbench["ad_alerts"])
+    assert all(
+        item["related_id"] != plan_id
+        for item in workbench["tasks"]
+        if item["task_type"] == "ad_alert"
+    )
     assert imported["snapshots"] == 1
 
 
@@ -266,17 +271,93 @@ def test_ad_import_rejects_invalid_file(clean_database):
 
 
 def test_non_alert_ad_statuses_do_not_enter_workbench(clean_database):
-    pending = client.post("/api/ads/plans", json={"plan_name": "Pending target", "current_status": "target_roi_pending"}).json()
-    reached = client.post("/api/ads/plans", json={"plan_name": "Reached target", "current_status": "roi_reached"}).json()
-    workbench = client.get("/api/workbench/today").json()
+    non_reminders = [
+        client.post("/api/ads/plans", json={"plan_name": name, "current_status": status}).json()
+        for name, status in (
+            ("No spend", "no_spend"),
+            ("Exploring", "exploring"),
+            ("Low ROI", "low_roi"),
+            ("Pending target", "target_roi_pending"),
+            ("Reached target", "roi_reached"),
+        )
+    ]
+    empty_burn = client.post("/api/ads/plans", json={
+        "plan_name": "Empty burn", "current_status": "empty_burn",
+    }).json()
+    stale_task = client.post("/api/work-tasks", json={
+        "title": "Old low ROI reminder",
+        "task_type": "ad_alert",
+        "priority": "high",
+        "task_date": "2026-09-10",
+        "source": "system",
+        "related_type": "ad_plan",
+        "related_id": non_reminders[2]["id"],
+    }).json()
+    workbench = client.get("/api/workbench/today", params={"task_date": "2026-09-10"}).json()
     alert_ids = {item["id"] for item in workbench["ad_alerts"]}
-    assert pending["id"] not in alert_ids and reached["id"] not in alert_ids
-    task_ids = {item["related_id"] for item in workbench["tasks"] if item["task_type"] == "ad_alert"}
-    assert pending["id"] not in task_ids and reached["id"] not in task_ids
+    task_ids = {
+        item["related_id"] for item in workbench["tasks"]
+        if item["task_type"] == "ad_alert" and item["status"] != "completed"
+    }
+    assert alert_ids == {empty_burn["id"]}
+    assert task_ids == {empty_burn["id"]}
+    assert all(item["id"] not in alert_ids for item in non_reminders)
+    resolved_task = client.get(f"/api/work-tasks/{stale_task['id']}")
+    assert resolved_task.status_code == 200
+    assert resolved_task.json()["status"] == "completed"
+
+
+def test_empty_burn_operation_closes_workbench_reminder(clean_database):
+    plan = client.post("/api/ads/plans", json={
+        "plan_name": "A*9.7空烧测试", "imported_product_name": "Sunscreen",
+        "strategy_code": "A", "current_status": "empty_burn",
+    }).json()
+    before = client.get("/api/workbench/today", params={"task_date": "2026-09-11"}).json()
+    assert plan["id"] in {item["id"] for item in before["ad_alerts"]}
+    operation = client.post("/api/operations", json={
+        "ad_plan_id": plan["id"], "operation_type": "direct_stop",
+        "reason": "成本超过 $2 且无订单",
+    })
+    assert operation.status_code == 201
+    after = client.get("/api/workbench/today", params={"task_date": "2026-09-11"}).json()
+    assert plan["id"] not in {item["id"] for item in after["ad_alerts"]}
+    handled_task = next(item for item in after["tasks"] if item["task_type"] == "ad_alert" and item["related_id"] == plan["id"])
+    assert handled_task["status"] == "completed" and handled_task["completed_at"]
+
+    rows = [("A*9.7空烧测试", "", "Sunscreen", 3, 0, 0, 0, 10, "A", "", "")]
+    assert client.post("/api/ads/import", files={"file": ("ads.csv", _csv_file(rows), "text/csv")}).status_code == 201
+    reopened = client.get("/api/workbench/today", params={"task_date": "2026-09-11"}).json()
+    assert plan["id"] in {item["id"] for item in reopened["ad_alerts"]}
+    reopened_task = next(item for item in reopened["tasks"] if item["task_type"] == "ad_alert" and item["related_id"] == plan["id"])
+    assert reopened_task["status"] == "pending" and reopened_task["completed_at"] is None
+
+
+def test_ad_plan_list_supports_keyword_product_and_variant_filters(clean_database):
+    first = client.post("/api/ads/plans", json={
+        "plan_name": "A Sunscreen campaign", "imported_product_name": "Sunscreen",
+        "strategy_code": "A", "current_status": "empty_burn",
+    }).json()
+    client.post("/api/ads/plans", json={
+        "plan_name": "B Other campaign", "imported_product_name": "Other",
+        "strategy_code": "B", "current_status": "roi_reached",
+    })
+    response = client.get("/api/ads/plans", params={"q": "Sunscreen", "strategy_code": "A"})
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [first["id"]]
+
+
+def test_deleting_ad_plan_removes_related_work_task(clean_database):
+    plan = client.post("/api/ads/plans", json={
+        "plan_name": "Delete alert plan", "current_status": "empty_burn",
+    }).json()
+    tasks = client.get("/api/workbench/today", params={"task_date": "2026-09-11"}).json()["tasks"]
+    task = next(item for item in tasks if item["task_type"] == "ad_alert" and item["related_id"] == plan["id"])
+    assert client.delete(f"/api/ads/plans/{plan['id']}").status_code == 204
+    assert client.get(f"/api/work-tasks/{task['id']}").status_code == 404
 
 
 def test_workbench_and_operation_record_validation(clean_database):
-    plan = client.post("/api/ads/plans", json={"plan_name": "Review plan", "current_status": "low_roi"}).json()
+    plan = client.post("/api/ads/plans", json={"plan_name": "Review plan", "current_status": "empty_burn"}).json()
     workbench = client.get("/api/workbench/today")
     assert workbench.status_code == 200
     assert any(item["id"] == plan["id"] for item in workbench.json()["ad_alerts"])
@@ -292,7 +373,7 @@ def test_workbench_and_operation_record_validation(clean_database):
 
 
 def test_daily_work_tasks_are_persisted_and_idempotent(clean_database):
-    plan = client.post("/api/ads/plans", json={"plan_name": "Alert plan", "current_status": "low_roi"}).json()
+    plan = client.post("/api/ads/plans", json={"plan_name": "Alert plan", "current_status": "empty_burn"}).json()
     first = client.get("/api/work-tasks", params={"task_date": "2026-09-09"})
     assert first.status_code == 200
     tasks = first.json()

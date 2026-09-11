@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .ad_models import AdPlan
-from .ad_services import ALERT_STATUSES, latest_snapshot, recompute_plan_status
+from .ad_services import REMINDER_STATUSES, is_alert_pending, latest_snapshot, recompute_plan_status
 from .models import MixProject, VideoWork
 from .work_models import WorkTask
 
@@ -49,11 +49,28 @@ def ensure_daily_tasks(db: Session, task_date: date) -> list[WorkTask]:
     plans = db.scalars(select(AdPlan)).all()
     for plan in plans:
         recompute_plan_status(plan)
-    alerts = [plan for plan in plans if plan.current_status in ALERT_STATUSES]
+    alerts = [plan for plan in plans if plan.current_status in REMINDER_STATUSES and is_alert_pending(plan)]
+    alert_plan_ids = {plan.id for plan in alerts}
+    stale_alert_tasks = db.scalars(select(WorkTask).where(
+        WorkTask.task_date == task_date,
+        WorkTask.task_type == "ad_alert",
+        WorkTask.source == "system",
+        WorkTask.is_archived.is_(False),
+    )).all()
+    for task in stale_alert_tasks:
+        if task.related_id not in alert_plan_ids:
+            task.status = "completed"
+            task.completed_at = datetime.utcnow()
+
     for plan in alerts:
-        if not _find_existing(db, task_date, "ad_alert", "system", plan.id):
-            snapshot = latest_snapshot(plan)
-            description = snapshot.reason if snapshot and snapshot.reason else "广告计划触发异常规则，请回 TikTok 后台确认。"
+        existing = _find_existing(db, task_date, "ad_alert", "system", plan.id)
+        snapshot = latest_snapshot(plan)
+        description = snapshot.reason if snapshot and snapshot.reason else "广告计划触发异常规则，请回 TikTok 后台确认。"
+        if existing and not existing.is_archived:
+            existing.status = "pending"
+            existing.completed_at = None
+            existing.description = description
+        elif not existing:
             db.add(WorkTask(title=f"检查广告计划：{plan.plan_name}", description=description,
                             task_type="ad_alert", priority="high", task_date=task_date, source="system",
                             related_type="ad_plan", related_id=plan.id))

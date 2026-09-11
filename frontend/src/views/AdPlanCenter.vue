@@ -46,6 +46,18 @@
           <h3>当前广告计划</h3>
           <span class="muted">目标 ROI 按“产品 + A/B”同步；日期不同不会改变目标值，A 与 B 仍可不同。</span>
         </div>
+        <div class="ad-filter-row">
+          <el-input v-model="keyword" clearable placeholder="搜索计划、产品或 Campaign ID" @keyup.enter="load" />
+          <el-select v-model="productFilter" clearable placeholder="全部产品">
+            <el-option v-for="item in productOptions" :key="item" :label="item" :value="item" />
+          </el-select>
+          <el-select v-model="variantFilter" clearable placeholder="全部 A/B">
+            <el-option label="A" value="A" /><el-option label="B" value="B" />
+          </el-select>
+          <el-select v-model="processingFilter" placeholder="全部处理状态">
+            <el-option label="全部处理状态" value="all" /><el-option label="待处理" value="pending" /><el-option label="已处理" value="handled" />
+          </el-select>
+        </div>
         <el-radio-group v-model="activeStatus" size="small">
           <el-radio-button v-for="item in statusOptions" :key="item.value" :value="item.value">
             {{ item.label }} {{ item.value ? statusCount(item.value) : plans.length }}
@@ -53,7 +65,7 @@
         </el-radio-group>
       </div>
 
-      <el-table v-loading="loading" :data="filteredPlans" stripe empty-text="暂无符合条件的广告计划">
+      <el-table v-loading="loading" :data="filteredPlans" stripe empty-text="暂无符合条件的广告计划" @sort-change="sortPlans">
         <el-table-column prop="plan_name" label="广告计划" min-width="245">
           <template #default="scope">
             <div class="plan-name">{{ scope.row.plan_name }}</div>
@@ -96,12 +108,12 @@
         <el-table-column label="建议" min-width="260">
           <template #default="scope"><span class="recommendation">{{ scope.row.latest_snapshot?.recommendation || '暂无最新快照' }}</span></template>
         </el-table-column>
-        <el-table-column label="更新时间" width="170">
+        <el-table-column label="更新时间" width="170" sortable="custom">
           <template #default="scope">{{ dateTime(scope.row.latest_snapshot?.snapshot_at) }}</template>
         </el-table-column>
         <el-table-column label="操作" fixed="right" width="150">
           <template #default="scope">
-            <el-button link @click="showSnapshots(scope.row)">快照</el-button>
+            <el-button link @click="showSnapshots(scope.row)">详情</el-button>
             <el-button link type="primary" @click="recordOperation(scope.row)">记录操作</el-button>
           </template>
         </el-table-column>
@@ -130,7 +142,16 @@
       </section>
     </div>
 
-    <el-drawer v-model="snapshotDrawer" :title="`${selectedPlan?.plan_name || ''} · 历史快照`" size="min(760px, 92vw)">
+    <el-drawer v-model="snapshotDrawer" :title="`${selectedPlan?.plan_name || ''} · 计划详情`" size="min(860px, 94vw)">
+      <section v-if="selectedPlan" class="plan-detail-summary">
+        <div class="detail-row"><span>产品 / 类型</span><strong>{{ selectedPlan.imported_product_name || selectedPlan.product?.name || '未识别' }} · {{ selectedPlan.strategy_code || '-' }}</strong></div>
+        <div class="detail-row"><span>当前状态</span><strong><el-tag :type="statusType(selectedPlan.current_status)" effect="plain">{{ statusLabel(selectedPlan.current_status) }}</el-tag></strong></div>
+        <div class="detail-row"><span>成本 / 订单 / 实际 ROI</span><strong>{{ money(selectedPlan.latest_snapshot?.spend) }} · {{ value(selectedPlan.latest_snapshot?.orders) }} · {{ number(selectedPlan.latest_snapshot?.actual_roi) }}</strong></div>
+        <div class="detail-row"><span>目标 ROI / 预算</span><strong>{{ number(selectedPlan.target_roi) }} · {{ money(selectedPlan.latest_snapshot?.budget) }}</strong></div>
+        <div class="detail-row"><span>判断依据</span><strong>{{ selectedPlan.latest_snapshot?.reason || '暂无最新快照' }}</strong></div>
+        <div class="detail-actions"><el-button type="primary" @click="recordOperation(selectedPlan)">记录操作</el-button><span v-if="isHandled(selectedPlan)" class="handled-badge">已记录处理</span><span v-else class="pending-badge">待处理</span></div>
+      </section>
+      <h3>最近快照</h3>
       <el-table :data="snapshots" stripe empty-text="暂无快照">
         <el-table-column prop="snapshot_at" label="时间" width="170"><template #default="scope">{{ dateTime(scope.row.snapshot_at) }}</template></el-table-column>
         <el-table-column prop="spend" label="成本" width="80" />
@@ -139,7 +160,14 @@
         <el-table-column prop="budget" label="预算" width="80" />
         <el-table-column label="状态" width="120"><template #default="scope">{{ statusLabel(scope.row.status) }}</template></el-table-column>
         <el-table-column prop="reason" label="判断依据" min-width="230" />
+        <el-table-column label="成本变化" width="110"><template #default="scope">{{ snapshotDelta(scope.$index, 'spend') }}</template></el-table-column>
       </el-table>
+      <h3 class="drawer-section-title">操作记录</h3>
+      <div v-for="item in selectedOperations" :key="item.id" class="operation-history-row">
+        <div><strong>{{ operationLabel(item.operation_type) }}</strong><span>{{ dateTime(item.operated_at) }}</span></div>
+        <p>{{ item.reason || '未填写原因' }}<small v-if="item.notes"> · {{ item.notes }}</small></p>
+      </div>
+      <el-empty v-if="!selectedOperations.length" description="该计划暂无运营记录" :image-size="50" />
     </el-drawer>
 
     <el-dialog v-model="settingDialog" :title="editingSettingId ? '编辑目标 ROI 配置' : '新增目标 ROI 配置'" width="480px">
@@ -166,10 +194,18 @@ const targetSettings = ref<any[]>([])
 const snapshots = ref<any[]>([])
 const selectedPlan = ref<any>(null)
 const snapshotDrawer = ref(false)
+const selectedOperations = ref<any[]>([])
+const operationRecords = ref<any[]>([])
 const importMessage = ref('')
 const importing = ref(false)
 const loading = ref(false)
 const activeStatus = ref('')
+const keyword = ref('')
+const productFilter = ref('')
+const variantFilter = ref('')
+const processingFilter = ref('all')
+const sortKey = ref('')
+const sortOrder = ref<'ascending' | 'descending' | null>(null)
 const savingIds = ref<number[]>([])
 const targetDraft = ref<Record<number, number | null>>({})
 const variantDraft = ref<Record<number, 'A' | 'B' | null>>({})
@@ -188,9 +224,30 @@ const statusOptions = [
   { label: '待设目标', value: 'target_roi_pending' },
 ]
 
-const filteredPlans = computed(() => activeStatus.value
-  ? plans.value.filter((item) => item.current_status === activeStatus.value)
-  : plans.value)
+const productOptions = computed(() => Array.from(new Set(plans.value.map((item) => item.imported_product_name || item.product?.name).filter(Boolean))))
+const filteredPlans = computed(() => {
+  let result = plans.value.filter((item) => {
+    const text = keyword.value.trim().toLowerCase()
+    const product = item.imported_product_name || item.product?.name || ''
+    const matchesKeyword = !text || `${item.plan_name} ${product} ${item.platform_campaign_id || ''}`.toLowerCase().includes(text)
+    const matchesProduct = !productFilter.value || product === productFilter.value
+    const matchesVariant = !variantFilter.value || item.strategy_code === variantFilter.value
+    const matchesStatus = !activeStatus.value || item.current_status === activeStatus.value
+    const handled = isHandled(item)
+    const matchesProcessing = processingFilter.value === 'all'
+      || (item.current_status === 'empty_burn' && (processingFilter.value === 'handled' ? handled : !handled))
+    return matchesKeyword && matchesProduct && matchesVariant && matchesStatus && matchesProcessing
+  })
+  if (sortKey.value) {
+    result = [...result].sort((a, b) => {
+      const av = sortKey.value === 'updated_at' ? (a.latest_snapshot?.snapshot_at || '') : (a[sortKey.value] ?? 0)
+      const bv = sortKey.value === 'updated_at' ? (b.latest_snapshot?.snapshot_at || '') : (b[sortKey.value] ?? 0)
+      const comparison = String(av).localeCompare(String(bv), 'zh-CN', { numeric: true })
+      return sortOrder.value === 'descending' ? -comparison : comparison
+    })
+  }
+  return result
+})
 
 const statusCount = (status: string) => plans.value.filter((item) => item.current_status === status).length
 const value = (input: unknown) => input === null || input === undefined ? '-' : String(input)
@@ -204,16 +261,33 @@ const statusLabel = (status: string) => ({
 const statusType = (status: string) => status === 'roi_reached' || status === 'normal' ? 'success'
   : status === 'empty_burn' || status === 'no_spend' ? 'danger'
     : status === 'low_roi' ? 'warning' : 'info'
+const operationLabel = (value: string) => value === 'direct_stop' ? '直接关停' : '重建并修改目标 ROI'
+const isHandled = (plan: any) => {
+  const operations = plan.operations || operationRecords.value.filter((item) => item.ad_plan_id === plan.id)
+  const latestOperation = operations.slice().sort((a: any, b: any) => new Date(b.operated_at).getTime() - new Date(a.operated_at).getTime())[0]
+  if (!latestOperation) return false
+  const snapshotAt = plan.latest_snapshot?.snapshot_at
+  return !snapshotAt || new Date(latestOperation.operated_at).getTime() >= new Date(snapshotAt).getTime()
+}
+const sortPlans = ({ prop, order }: any) => { sortKey.value = prop || ''; sortOrder.value = order }
+const snapshotDelta = (index: number, key: string) => {
+  if (index >= snapshots.value.length - 1) return '-'
+  const current = Number(snapshots.value[index]?.[key] || 0)
+  const previous = Number(snapshots.value[index + 1]?.[key] || 0)
+  const delta = current - previous
+  return `${delta >= 0 ? '+' : ''}${delta.toFixed(2)}`
+}
 
 async function load() {
   loading.value = true
   try {
-    const [planResult, batchResult, settingResult] = await Promise.all([
-      axios.get('/api/ads/plans'), axios.get('/api/ads/import-batches'), axios.get('/api/ads/target-roi-settings'),
+    const [planResult, batchResult, settingResult, operationResult] = await Promise.all([
+      axios.get('/api/ads/plans'), axios.get('/api/ads/import-batches'), axios.get('/api/ads/target-roi-settings'), axios.get('/api/operations'),
     ])
     plans.value = planResult.data
     batches.value = batchResult.data
     targetSettings.value = settingResult.data
+    operationRecords.value = operationResult.data
     targetDraft.value = Object.fromEntries(plans.value.map((item) => [item.id, item.target_roi]))
     variantDraft.value = Object.fromEntries(plans.value.map((item) => [item.id, item.strategy_code]))
   } catch (error: any) {
@@ -261,7 +335,12 @@ async function saveTarget(plan: any) {
 
 async function showSnapshots(plan: any) {
   selectedPlan.value = plan
-  snapshots.value = (await axios.get('/api/ads/snapshots', { params: { ad_plan_id: plan.id } })).data
+  const [snapshotResult, operationResult] = await Promise.all([
+    axios.get('/api/ads/snapshots', { params: { ad_plan_id: plan.id } }),
+    axios.get('/api/operations', { params: { ad_plan_id: plan.id } }),
+  ])
+  snapshots.value = snapshotResult.data
+  selectedOperations.value = operationResult.data
   snapshotDrawer.value = true
 }
 

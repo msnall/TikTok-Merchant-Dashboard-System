@@ -7,6 +7,7 @@ from .ad_services import import_rows, latest_snapshot, normalize_product_name, p
 from .db import get_db
 from .main_helpers import serialize
 from .models import Market, Product
+from .work_models import WorkTask
 
 router = APIRouter(prefix="/api", tags=["advertising"])
 
@@ -37,7 +38,8 @@ def clear_target_setting(db: Session, product_key: str, strategy_code: str):
             recompute_plan_status(plan)
 
 @router.get("/ads/plans")
-def list_ad_plans(status: str | None = None, db: Session = Depends(get_db)):
+def list_ad_plans(status: str | None = None, q: str | None = None, product_id: int | None = None,
+                  strategy_code: str | None = None, db: Session = Depends(get_db)):
     stmt = select(AdPlan).order_by(AdPlan.id.desc())
     items = db.scalars(stmt).all()
     for item in items:
@@ -45,6 +47,15 @@ def list_ad_plans(status: str | None = None, db: Session = Depends(get_db)):
     db.commit()
     if status:
         items = [item for item in items if item.current_status == status]
+    if q:
+        query = q.strip().casefold()
+        items = [item for item in items if query in item.plan_name.casefold()
+                 or query in (item.imported_product_name or "").casefold()
+                 or query in (item.platform_campaign_id or "").casefold()]
+    if product_id is not None:
+        items = [item for item in items if item.product_id == product_id]
+    if strategy_code:
+        items = [item for item in items if item.strategy_code == strategy_code]
     return [serialize_plan(item) for item in items]
 
 @router.post("/ads/plans", status_code=201)
@@ -175,6 +186,9 @@ def delete_target_roi_setting(setting_id: int, db: Session = Depends(get_db)):
 def delete_ad_plan(plan_id: int, db: Session = Depends(get_db)):
     item = db.get(AdPlan, plan_id)
     if not item: raise HTTPException(404, "广告计划不存在")
+    db.query(WorkTask).filter(
+        WorkTask.related_type == "ad_plan", WorkTask.related_id == plan_id
+    ).delete(synchronize_session=False)
     db.delete(item); db.commit()
 
 @router.get("/ads/snapshots")

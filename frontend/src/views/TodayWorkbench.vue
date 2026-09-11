@@ -81,7 +81,7 @@ const statusFilter = ref<string | undefined>()
 const priorityFilter = ref<string | undefined>()
 const customDialog = ref(false)
 const editingTaskId = ref<number | null>(null)
-const customForm = ref<any>({ title: '', priority: 'medium', notes: '' })
+const customForm = ref<any>({ title: '', priority: 'medium', notes: '', status: 'pending' })
 const countBy = (status: string) => tasks.value.filter(item => item.status === status).length
 const countPriority = (priority: string) => tasks.value.filter(item => item.priority === priority).length
 const dueTime = (value: string | null) => value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'
@@ -114,6 +114,7 @@ async function updateStatus(task: any, status: string) {
     const response = await axios.patch(`/api/work-tasks/${task.id}/status`, { status })
     task.status = response.data.status
     task.completed_at = response.data.completed_at
+    await refresh()
     ElMessage.success('任务状态已保存')
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '状态保存失败')
@@ -130,17 +131,17 @@ async function saveCustomTask() {
       title: customForm.value.title,
       description: customForm.value.notes || null,
       task_type: 'content_task',
-      status: 'pending',
+      status: customForm.value.status || 'pending',
       priority: customForm.value.priority,
       task_date: data.value.date || new Date().toISOString().slice(0, 10),
       source: 'manual',
       notes: customForm.value.notes || null,
     }
-    if (editingTaskId.value) await axios.put(`/api/work-tasks/${editingTaskId.value}`, { ...payload, status: 'pending' })
+    if (editingTaskId.value) await axios.put(`/api/work-tasks/${editingTaskId.value}`, payload)
     else await axios.post('/api/work-tasks', payload)
     customDialog.value = false
     editingTaskId.value = null
-    customForm.value = { title: '', priority: 'medium', notes: '' }
+    customForm.value = { title: '', priority: 'medium', notes: '', status: 'pending' }
     await refresh()
     ElMessage.success('任务已创建')
   } catch (error: any) {
@@ -150,7 +151,7 @@ async function saveCustomTask() {
 
 function editTask(task: any) {
   editingTaskId.value = task.id
-  customForm.value = { title: task.title, priority: task.priority, notes: task.notes || task.description || '' }
+  customForm.value = { title: task.title, priority: task.priority, notes: task.notes || task.description || '', status: task.status }
   customDialog.value = true
 }
 

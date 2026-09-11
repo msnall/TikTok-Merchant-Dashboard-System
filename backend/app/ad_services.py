@@ -20,7 +20,7 @@ ALIASES = {
     "product_unit_price": ["product_unit_price", "客单价", "产品客单价", "售价"],
 }
 
-ALERT_STATUSES = {"no_spend", "empty_burn", "low_roi"}
+REMINDER_STATUSES = {"empty_burn"}
 EMPTY_BURN_THRESHOLD = 2.0
 PLAN_VARIANT_PATTERN = re.compile(r"^([AB])\*")
 PLAN_PRODUCT_PATTERN = re.compile(
@@ -123,6 +123,17 @@ def evaluate_snapshot(ad_plan, spend, orders, actual_roi):
 
 def latest_snapshot(ad_plan: AdPlan) -> AdPlanSnapshot | None:
     return max(ad_plan.snapshots, key=lambda item: (item.snapshot_at or datetime.min, item.id), default=None)
+
+
+def is_alert_pending(ad_plan: AdPlan) -> bool:
+    """An empty-burn alert is handled once an operation is recorded after its latest snapshot."""
+    if ad_plan.current_status != "empty_burn":
+        return False
+    latest_operation = max(ad_plan.operations, key=lambda item: (item.operated_at or datetime.min, item.id), default=None)
+    if latest_operation is None:
+        return True
+    snapshot = latest_snapshot(ad_plan)
+    return snapshot is not None and (latest_operation.operated_at or datetime.min) < (snapshot.snapshot_at or datetime.min)
 
 
 def recompute_plan_status(ad_plan: AdPlan) -> AdPlanSnapshot | None:
