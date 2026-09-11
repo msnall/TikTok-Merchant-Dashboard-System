@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from .ad_models import AdImportBatch, AdPlan, AdPlanSnapshot, AdStrategy, AdTargetRoiSetting, OperationRecord
 from .ad_schemas import AdPlanCreate, AdPlanVariantUpdate, AdStrategyCreate, AdTargetRoiSettingPayload, OperationCreate, TargetRoiUpdate
-from .ad_services import import_rows, latest_snapshot, normalize_product_name, parse_upload, recompute_plan_status
+from .ad_services import VALID_STRATEGY_CODES, apply_target_setting, clear_target_setting, import_rows, latest_snapshot, normalize_product_name, parse_upload, recompute_plan_status
 from .db import get_db
 from .main_helpers import serialize
 from .models import Market, Product
@@ -18,24 +18,6 @@ def serialize_plan(item: AdPlan):
     data["latest_snapshot"] = serialize(snapshot) if snapshot else None
     return data
 
-
-def apply_target_setting(db: Session, setting: AdTargetRoiSetting):
-    plans = db.scalars(select(AdPlan).where(AdPlan.strategy_code == setting.strategy_code)).all()
-    changed = 0
-    for plan in plans:
-        if plan.imported_product_name and normalize_product_name(plan.imported_product_name) == setting.product_key:
-            plan.target_roi = setting.target_roi
-            recompute_plan_status(plan)
-            changed += 1
-    return changed
-
-
-def clear_target_setting(db: Session, product_key: str, strategy_code: str):
-    plans = db.scalars(select(AdPlan).where(AdPlan.strategy_code == strategy_code)).all()
-    for plan in plans:
-        if plan.imported_product_name and normalize_product_name(plan.imported_product_name) == product_key:
-            plan.target_roi = None
-            recompute_plan_status(plan)
 
 @router.get("/ads/plans")
 def list_ad_plans(status: str | None = None, q: str | None = None, product_id: int | None = None,
@@ -82,7 +64,7 @@ def update_target_roi(plan_id: int, payload: TargetRoiUpdate, db: Session = Depe
     item = db.get(AdPlan, plan_id)
     if not item:
         raise HTTPException(404, "广告计划不存在")
-    if item.imported_product_name and item.strategy_code in {"A", "B"} and payload.target_roi is not None:
+    if item.imported_product_name and item.strategy_code in VALID_STRATEGY_CODES and payload.target_roi is not None:
         product_key = normalize_product_name(item.imported_product_name)
         setting = db.scalar(select(AdTargetRoiSetting).where(
             AdTargetRoiSetting.product_key == product_key,
@@ -136,7 +118,7 @@ def create_target_roi_setting(payload: AdTargetRoiSettingPayload, db: Session = 
         AdTargetRoiSetting.strategy_code == payload.strategy_code,
     ))
     if existing:
-        raise HTTPException(409, "该产品和 A/B 类型已经配置目标 ROI")
+        raise HTTPException(409, "该产品和 A/B/C/D 类型已经配置目标 ROI")
     item = AdTargetRoiSetting(product_name=product_name, product_key=product_key,
                               strategy_code=payload.strategy_code, target_roi=payload.target_roi)
     db.add(item); db.flush()
@@ -161,7 +143,7 @@ def update_target_roi_setting(setting_id: int, payload: AdTargetRoiSettingPayloa
         AdTargetRoiSetting.id != setting_id,
     ))
     if duplicate:
-        raise HTTPException(409, "该产品和 A/B 类型已经配置目标 ROI")
+        raise HTTPException(409, "该产品和 A/B/C/D 类型已经配置目标 ROI")
     if old_product_key != product_key or old_strategy_code != payload.strategy_code:
         clear_target_setting(db, old_product_key, old_strategy_code)
     item.product_name = product_name

@@ -22,10 +22,8 @@ ALIASES = {
 
 REMINDER_STATUSES = {"empty_burn"}
 EMPTY_BURN_THRESHOLD = 2.0
-PLAN_VARIANT_PATTERN = re.compile(r"^([AB])\*")
-PLAN_PRODUCT_PATTERN = re.compile(
-    r"^[A-Z]\*\d{1,2}\.\d{1,2}(.*?)(?:\d+(?:\.\d+)?(?:\s+\d+(?:\.\d+)?)*)\.*$"
-)
+PLAN_NAME_PATTERN = re.compile(r"^([ABCD])\*\s*\d{1,2}\.\d{1,2}\s*(.+?)\s*$")
+VALID_STRATEGY_CODES = {"A", "B", "C", "D"}
 
 
 def _number(value, default=None):
@@ -47,12 +45,27 @@ def _has_column(row, key):
     return any(re.sub(r"[\s_\-]", "", alias).lower() in normalized for alias in ALIASES[key])
 
 
-def parse_plan_name(plan_name: str) -> tuple[str | None, str | None]:
-    """Parse only the A/B marker and product shape observed in the supplied export."""
-    variant_match = PLAN_VARIANT_PATTERN.match(plan_name)
-    product_match = PLAN_PRODUCT_PATTERN.match(plan_name)
+def parse_plan_name(plan_name: str, known_products=None) -> tuple[str | None, str | None]:
+    """Parse the A/B/C/D marker, report date, product name and trailing price parameters."""
+    value = str(plan_name or "").strip()
+    match = PLAN_NAME_PATTERN.match(value)
+    if not match:
+        return None, None
+    variant, remainder = match.groups()
+    remainder = remainder.strip().rstrip(".").strip()
+    if known_products:
+        candidates = sorted(
+            {str(item).strip() for item in known_products if str(item).strip()},
+            key=lambda item: len(normalize_product_name(item)),
+            reverse=True,
+        )
+        normalized_remainder = normalize_product_name(remainder)
+        for candidate in candidates:
+            if normalized_remainder.startswith(normalize_product_name(candidate)):
+                return variant, candidate
+    product_match = re.match(r"^(.*?\D)(?:\s*\d+(?:\.\d+)?)+\.*$", remainder)
     product_name = product_match.group(1).strip() if product_match else None
-    return (variant_match.group(1) if variant_match else None), (product_name or None)
+    return variant, (product_name or None)
 
 
 def normalize_product_name(product_name: str) -> str:
@@ -60,7 +73,7 @@ def normalize_product_name(product_name: str) -> str:
 
 
 def find_target_setting(db, product_name: str | None, strategy_code: str | None):
-    if not product_name or strategy_code not in {"A", "B"}:
+    if not product_name or strategy_code not in VALID_STRATEGY_CODES:
         return None
     return db.scalar(select(AdTargetRoiSetting).where(
         AdTargetRoiSetting.product_key == normalize_product_name(product_name),
@@ -82,7 +95,11 @@ def parse_upload(filename: str, content: bytes):
             workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
         except (BadZipFile, OSError, ValueError) as exc:
             raise ValueError("Excel 文件无效或已损坏") from exc
-        sheet = workbook.active; rows = sheet.iter_rows(values_only=True); headers = [str(x or "") for x in next(rows, ())]
+        sheet = workbook.active
+        # TikTok exports can contain an incorrect A1:A1 worksheet dimension.
+        if sheet.calculate_dimension() == "A1:A1":
+            sheet.reset_dimensions()
+        rows = sheet.iter_rows(values_only=True); headers = [str(x or "") for x in next(rows, ())]
         return [dict(zip(headers, values)) for values in rows if any(value is not None for value in values)]
     raise ValueError("仅支持 .xlsx、.xlsm 或 .csv 文件")
 
@@ -150,6 +167,25 @@ def recompute_plan_status(ad_plan: AdPlan) -> AdPlanSnapshot | None:
     return snapshot
 
 
+def apply_target_setting(db, setting: AdTargetRoiSetting):
+    plans = db.scalars(select(AdPlan).where(AdPlan.strategy_code == setting.strategy_code)).all()
+    changed = 0
+    for plan in plans:
+        if plan.imported_product_name and normalize_product_name(plan.imported_product_name) == setting.product_key:
+            plan.target_roi = setting.target_roi
+            recompute_plan_status(plan)
+            changed += 1
+    return changed
+
+
+def clear_target_setting(db, product_key: str, strategy_code: str):
+    plans = db.scalars(select(AdPlan).where(AdPlan.strategy_code == strategy_code)).all()
+    for plan in plans:
+        if plan.imported_product_name and normalize_product_name(plan.imported_product_name) == product_key:
+            plan.target_roi = None
+            recompute_plan_status(plan)
+
+
 def import_rows(db, filename, rows, markets, products):
     from .ad_models import AdImportBatch
     validate_import_rows(rows)
@@ -167,7 +203,7 @@ def import_rows(db, filename, rows, markets, products):
         if plan is None:
             plan = db.scalar(select(AdPlan).where(AdPlan.plan_name == name))
         supplied_strategy = str(_find(row, "strategy_code") or "").strip().upper()
-        strategy_code = supplied_strategy if supplied_strategy in {"A", "B"} else parsed_strategy
+        strategy_code = supplied_strategy if supplied_strategy in VALID_STRATEGY_CODES else parsed_strategy
         imported_price = _number(_find(row, "product_unit_price"), None)
         if not plan:
             plan = AdPlan(platform_campaign_id=campaign_id, plan_name=name, imported_product_name=product_name or None,

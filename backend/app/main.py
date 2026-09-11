@@ -19,6 +19,7 @@ from . import work_models
 from .ad_api import router as ad_router
 from .workbench_api import router as workbench_router
 from .work_api import router as work_task_router, legacy_router as legacy_work_task_router
+from .fill_assistant_api import router as fill_assistant_router
 import json
 import io
 import re
@@ -34,6 +35,7 @@ app.include_router(ad_router)
 app.include_router(workbench_router)
 app.include_router(work_task_router)
 app.include_router(legacy_work_task_router)
+app.include_router(fill_assistant_router)
 
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError):

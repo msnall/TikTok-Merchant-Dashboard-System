@@ -24,12 +24,12 @@ class TargetRoiUpdate(AdPayload):
 
 
 class AdPlanVariantUpdate(AdPayload):
-    strategy_code: Literal["A", "B"] | None
+    strategy_code: Literal["A", "B", "C", "D"] | None
 
 
 class AdTargetRoiSettingPayload(AdPayload):
     product_name: str = Field(min_length=1, max_length=255)
-    strategy_code: Literal["A", "B"]
+    strategy_code: Literal["A", "B", "C", "D"]
     target_roi: float = Field(gt=0)
 
 

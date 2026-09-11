@@ -20,12 +20,12 @@
 
     <section class="workspace-panel roi-settings-panel">
       <div class="section-head">
-        <div><h3>产品 A/B 目标 ROI</h3><span class="muted">先在这里配置。以后导入任何日期的同产品 A/B 计划，都会自动使用相同目标 ROI。</span></div>
+        <div><h3>产品 A/B/C/D 目标 ROI</h3><span class="muted">以后导入任何日期的同产品计划，都会按产品和编号使用相同目标 ROI。</span></div>
         <el-button type="primary" @click="openSetting()">新增配置</el-button>
       </div>
-      <el-table :data="targetSettings" stripe empty-text="尚未配置目标 ROI，请先新增产品 A/B 配置">
+      <el-table :data="targetSettings" stripe empty-text="尚未配置目标 ROI，请先新增产品和编号配置">
         <el-table-column prop="product_name" label="产品" min-width="200" />
-        <el-table-column prop="strategy_code" label="A/B" width="90" />
+        <el-table-column prop="strategy_code" label="编号" width="90" />
         <el-table-column prop="target_roi" label="目标 ROI" width="120"><template #default="scope">{{ number(scope.row.target_roi) }}</template></el-table-column>
         <el-table-column prop="updated_at" label="更新时间" width="180"><template #default="scope">{{ dateTime(scope.row.updated_at) }}</template></el-table-column>
         <el-table-column label="操作" width="130"><template #default="scope"><el-button link @click="openSetting(scope.row)">编辑</el-button><el-button link type="danger" @click="removeSetting(scope.row)">删除</el-button></template></el-table-column>
@@ -44,15 +44,15 @@
       <div class="section-head ad-toolbar">
         <div>
           <h3>当前广告计划</h3>
-          <span class="muted">目标 ROI 按“产品 + A/B”同步；日期不同不会改变目标值，A 与 B 仍可不同。</span>
+          <span class="muted">目标 ROI 按“产品 + A/B/C/D”同步；日期不同不会改变目标值。</span>
         </div>
         <div class="ad-filter-row">
           <el-input v-model="keyword" clearable placeholder="搜索计划、产品或 Campaign ID" @keyup.enter="load" />
           <el-select v-model="productFilter" clearable placeholder="全部产品">
             <el-option v-for="item in productOptions" :key="item" :label="item" :value="item" />
           </el-select>
-          <el-select v-model="variantFilter" clearable placeholder="全部 A/B">
-            <el-option label="A" value="A" /><el-option label="B" value="B" />
+          <el-select v-model="variantFilter" clearable placeholder="全部编号">
+            <el-option v-for="code in variantOptions" :key="code" :label="code" :value="code" />
           </el-select>
           <el-select v-model="processingFilter" placeholder="全部处理状态">
             <el-option label="全部处理状态" value="all" /><el-option label="待处理" value="pending" /><el-option label="已处理" value="handled" />
@@ -75,10 +75,10 @@
         <el-table-column label="产品" min-width="130">
           <template #default="scope">{{ scope.row.product?.name || scope.row.imported_product_name || '未识别' }}</template>
         </el-table-column>
-        <el-table-column label="A/B" width="92">
+        <el-table-column label="编号" width="92">
           <template #default="scope">
             <el-select v-model="variantDraft[scope.row.id]" clearable placeholder="-" size="small" @change="saveVariant(scope.row)">
-              <el-option label="A" value="A" /><el-option label="B" value="B" />
+              <el-option v-for="code in variantOptions" :key="code" :label="code" :value="code" />
             </el-select>
           </template>
         </el-table-column>
@@ -173,7 +173,7 @@
     <el-dialog v-model="settingDialog" :title="editingSettingId ? '编辑目标 ROI 配置' : '新增目标 ROI 配置'" width="480px">
       <el-form :model="settingForm" label-width="100px">
         <el-form-item label="产品名称"><el-input v-model="settingForm.product_name" placeholder="例如：微波炉蒸蛋器" /></el-form-item>
-        <el-form-item label="计划类型"><el-segmented v-model="settingForm.strategy_code" :options="['A', 'B']" /></el-form-item>
+        <el-form-item label="计划编号"><el-segmented v-model="settingForm.strategy_code" :options="variantOptions" /></el-form-item>
         <el-form-item label="目标 ROI"><el-input-number v-model="settingForm.target_roi" :min="0.01" :precision="2" :step="0.1" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="settingDialog = false">取消</el-button><el-button type="primary" :loading="settingSaving" @click="saveSetting">保存配置</el-button></template>
@@ -209,11 +209,12 @@ const sortKey = ref('')
 const sortOrder = ref<'ascending' | 'descending' | null>(null)
 const savingIds = ref<number[]>([])
 const targetDraft = ref<Record<number, number | null>>({})
-const variantDraft = ref<Record<number, 'A' | 'B' | null>>({})
+const variantDraft = ref<Record<number, 'A' | 'B' | 'C' | 'D' | null>>({})
 const settingDialog = ref(false)
 const settingSaving = ref(false)
 const editingSettingId = ref<number | null>(null)
 const settingForm = ref<any>({ product_name: '', strategy_code: 'A', target_roi: 2 })
+const variantOptions = ['A', 'B', 'C', 'D']
 
 const statusOptions = [
   { label: '全部', value: '' },
@@ -326,7 +327,7 @@ async function saveTarget(plan: any) {
     if (index >= 0) plans.value[index] = result
     targetDraft.value[plan.id] = result.target_roi
     await load()
-    ElMessage.success('该产品同 A/B 类型的目标 ROI 已同步')
+    ElMessage.success('该产品同编号的目标 ROI 已同步')
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '目标 ROI 保存失败')
   } finally {
@@ -350,10 +351,10 @@ async function saveVariant(plan: any) {
     const result = (await axios.patch(`/api/ads/plans/${plan.id}/variant`, { strategy_code: variantDraft.value[plan.id] || null })).data
     const index = plans.value.findIndex((item) => item.id === plan.id)
     if (index >= 0) plans.value[index] = result
-    ElMessage.success('A/B 标记已保存')
+    ElMessage.success('计划编号已保存')
   } catch (error: any) {
     variantDraft.value[plan.id] = plan.strategy_code
-    ElMessage.error(error?.response?.data?.detail || 'A/B 标记保存失败')
+    ElMessage.error(error?.response?.data?.detail || '计划编号保存失败')
   }
 }
 

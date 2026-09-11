@@ -193,7 +193,8 @@ def test_ad_rule_priority_and_plan_name_parser():
     assert evaluate_snapshot(SimpleNamespace(target_roi=None), 1, 1, 0)[0] == "target_roi_pending"
     assert parse_plan_name("A*9.7微波炉蒸蛋器0.82") == ("A", "微波炉蒸蛋器")
     assert parse_plan_name("B*9.7接线端子0.36 0.47") == ("B", "接线端子")
-    assert parse_plan_name("C*9.8微波炉蒸蛋器1.23")[0] is None
+    assert parse_plan_name("C*9.8微波炉蒸蛋器1.23") == ("C", "微波炉蒸蛋器")
+    assert parse_plan_name("D*9.10微波炉蒸蛋器1.23") == ("D", "微波炉蒸蛋器")
 
 
 def test_each_ad_plan_keeps_its_own_target_roi(clean_database):
@@ -212,7 +213,8 @@ def test_each_ad_plan_keeps_its_own_target_roi(clean_database):
     assert reloaded["A"]["current_status"] == "roi_reached"
     assert reloaded["B"]["current_status"] == "low_roi"
     assert client.patch(f"/api/ads/plans/{plans['A']['id']}/variant", json={"strategy_code": "B"}).json()["strategy_code"] == "B"
-    assert client.patch(f"/api/ads/plans/{plans['A']['id']}/variant", json={"strategy_code": "C"}).status_code == 422
+    assert client.patch(f"/api/ads/plans/{plans['A']['id']}/variant", json={"strategy_code": "C"}).status_code == 200
+    assert client.patch(f"/api/ads/plans/{plans['A']['id']}/variant", json={"strategy_code": "E"}).status_code == 422
 
 
 def test_product_variant_target_setting_applies_across_campaign_dates(clean_database):
