@@ -6,7 +6,7 @@ from .models import MixProject, VideoWork
 from .ad_models import AdPlan, AdPlanSnapshot, OperationRecord
 from .main_helpers import serialize
 from .work_services import ensure_daily_tasks
-from .ad_services import REMINDER_STATUSES, is_alert_pending
+from .ad_services import REMINDER_STATUSES, is_alert_pending, latest_snapshot
 from .work_schemas import TASK_PRIORITIES, TASK_STATUSES
 from datetime import date
 
@@ -38,4 +38,10 @@ def today(task_date: date | None = None, status: str | None = None, priority: st
     alert_candidates = db.scalars(select(AdPlan).where(AdPlan.current_status.in_(REMINDER_STATUSES)).order_by(AdPlan.updated_at.desc()).limit(50)).all()
     alerts = [plan for plan in alert_candidates if is_alert_pending(plan)][:10]
     operations = db.scalars(select(OperationRecord).order_by(OperationRecord.operated_at.desc()).limit(5)).all()
-    return {"date": target_date.isoformat(), "tasks": [serialize(item) for item in tasks], "task_summary": summary, "content_projects": [serialize(item) for item in projects], "pending_videos": [serialize(item) for item in videos], "ad_alerts": [serialize(item) for item in alerts], "recent_operations": [serialize(item) for item in operations]}
+    serialized_alerts = []
+    for item in alerts:
+        data = serialize(item)
+        snapshot = latest_snapshot(item)
+        data["latest_snapshot"] = serialize(snapshot) if snapshot else None
+        serialized_alerts.append(data)
+    return {"date": target_date.isoformat(), "tasks": [serialize(item) for item in tasks], "task_summary": summary, "content_projects": [serialize(item) for item in projects], "pending_videos": [serialize(item) for item in videos], "ad_alerts": serialized_alerts, "recent_operations": [serialize(item) for item in operations]}

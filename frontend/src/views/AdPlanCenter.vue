@@ -185,9 +185,10 @@
 import { computed, onMounted, ref } from 'vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const router = useRouter()
+const route = useRoute()
 const plans = ref<any[]>([])
 const batches = ref<any[]>([])
 const targetSettings = ref<any[]>([])
@@ -398,5 +399,10 @@ async function removeSetting(setting: any) {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  const planId = Number(route.query.plan_id)
+  const plan = plans.value.find((item) => item.id === planId)
+  if (plan) await showSnapshots(plan)
+})
 </script>

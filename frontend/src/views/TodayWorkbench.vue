@@ -52,7 +52,15 @@
       </section>
       <section class="workspace-panel">
         <div class="section-head"><h3>广告提醒</h3><el-button link type="primary" @click="router.push('/ads')">处理广告</el-button></div>
-        <div v-for="item in data.ad_alerts" :key="item.id" class="alert-row"><strong>{{ item.plan_name }}</strong><span>{{ item.current_status }}</span></div>
+        <div class="ad-alert-list">
+          <div v-for="item in data.ad_alerts" :key="item.id" class="ad-alert-card">
+            <div>
+              <strong>{{ item.plan_name }}</strong>
+              <div class="alert-meta"><span class="status-danger">疑似空烧</span><span>成本 {{ money(item.latest_snapshot?.spend) }}</span><span>SKU 订单 {{ value(item.latest_snapshot?.orders) }}</span></div>
+            </div>
+            <div class="alert-actions"><el-button link @click="openAd(item.id)">查看广告</el-button><el-button link type="primary" @click="recordAd(item.id)">记录处理</el-button></div>
+          </div>
+        </div>
         <el-empty v-if="!data.ad_alerts?.length" description="暂无广告提醒" :image-size="50" />
       </section>
     </div>
@@ -88,6 +96,10 @@ const dueTime = (value: string | null) => value ? new Date(value).toLocaleTimeSt
 const sourceLabel = (value: string) => value === 'sop' ? '运营 SOP' : value === 'system' ? '系统提醒' : '手动'
 const priorityLabel = (value: string) => value === 'high' ? '高' : value === 'low' ? '低' : '中'
 const priorityType = (value: string) => value === 'high' ? 'danger' : value === 'low' ? 'info' : 'warning'
+const value = (input: unknown) => input === null || input === undefined ? '-' : String(input)
+const money = (input: unknown) => input === null || input === undefined ? '-' : `$${Number(input).toFixed(2)}`
+const openAd = (id: number) => router.push({ path: '/ads', query: { plan_id: String(id) } })
+const recordAd = (id: number) => router.push({ path: '/operations', query: { ad_plan_id: String(id) } })
 
 async function refresh() {
   loading.value = true
@@ -156,7 +168,7 @@ function editTask(task: any) {
 }
 
 function openRelated(task: any) {
-  if (task.related_type === 'ad_plan') router.push('/ads')
+  if (task.related_type === 'ad_plan') openAd(task.related_id)
   else if (task.related_type === 'mix_project') router.push(`/mix-projects/${task.related_id}`)
   else if (task.related_type === 'video_work') router.push(`/videos/${task.related_id}`)
 }

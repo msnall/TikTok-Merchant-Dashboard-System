@@ -168,6 +168,10 @@ def test_ad_import_creates_snapshots_and_classifies_alerts(clean_database):
     assert plans["Exploring plan"]["current_status"] == "exploring"
     assert plans["Low ROI plan"]["current_status"] == "target_roi_pending"
     assert plans["Idle plan"]["current_status"] == "no_spend"
+    workbench = client.get("/api/workbench/today", params={"task_date": "2026-09-07"}).json()
+    burn_alert = next(item for item in workbench["ad_alerts"] if item["id"] == plans["Burn plan"]["id"])
+    assert burn_alert["latest_snapshot"]["spend"] == 120
+    assert burn_alert["latest_snapshot"]["orders"] == 0
     updated = client.patch(f"/api/ads/plans/{plans['Low ROI plan']['id']}/target-roi", json={"target_roi": 1.5})
     assert updated.status_code == 200 and updated.json()["current_status"] == "low_roi"
     client.patch(f"/api/ads/plans/{plans['Burn plan']['id']}/target-roi", json={"target_roi": 2.7})
