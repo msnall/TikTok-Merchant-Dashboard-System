@@ -14,7 +14,7 @@
         <div>
           <span class="step-label">每日计算</span>
           <h3>Product campaign</h3>
-          <p>{{ campaignFile?.name || '尚未选择当天报表' }}</p>
+          <p>{{ campaignFile?.name || analysis?.filename || '尚未选择当天报表' }}</p>
         </div>
         <el-button type="primary" :loading="analyzing" @click="campaignInput?.click()">
           {{ analyzing ? '正在计算' : '导入 Product campaign' }}
@@ -136,10 +136,22 @@ import { computed, onMounted, ref } from 'vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+const ANALYSIS_STORAGE_KEY = 'fill-assistant:full-consumption-payout'
+
+function restoreAnalysis() {
+  try {
+    const saved = sessionStorage.getItem(ANALYSIS_STORAGE_KEY)
+    return saved ? JSON.parse(saved) : null
+  } catch {
+    sessionStorage.removeItem(ANALYSIS_STORAGE_KEY)
+    return null
+  }
+}
+
 const campaignInput = ref<HTMLInputElement | null>(null)
 const configInput = ref<HTMLInputElement | null>(null)
 const campaignFile = ref<File | null>(null)
-const analysis = ref<any>(null)
+const analysis = ref<any>(restoreAnalysis())
 const targetSettings = ref<any[]>([])
 const analyzing = ref(false)
 const configImporting = ref(false)
@@ -166,10 +178,10 @@ async function runAnalysis() {
   analyzing.value = true
   try {
     analysis.value = (await axios.post('/api/fill-assistant/analyze', data)).data
+    sessionStorage.setItem(ANALYSIS_STORAGE_KEY, JSON.stringify(analysis.value))
     activeTab.value = 'results'
     ElMessage.success(`已完成 ${analysis.value.effective_rows} 条有效计划计算`)
   } catch (error: any) {
-    analysis.value = null
     ElMessage.error(error?.response?.data?.detail || 'Product campaign 导入失败')
   } finally {
     analyzing.value = false
@@ -221,6 +233,7 @@ async function downloadExport(endpoint: string, filename: string) {
 function clearAnalysis() {
   campaignFile.value = null
   analysis.value = null
+  sessionStorage.removeItem(ANALYSIS_STORAGE_KEY)
   activeTab.value = 'results'
 }
 

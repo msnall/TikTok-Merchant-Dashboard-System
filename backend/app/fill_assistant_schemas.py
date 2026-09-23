@@ -45,3 +45,35 @@ class FillAssistantAnalysis(FillAssistantPayload):
     calculated_payout_plans: int
     missing_target_roi_plans: int
     products: list[ProductCalculation]
+
+
+class AffiliateFeeAnalysis(FillAssistantPayload):
+    filename: str
+    total_rows: int
+    standard_commission_total: float
+    store_ad_commission_total: float
+    total_affiliate_fee: float
+    currency: str | None = None
+    standard_empty_rows: int
+    store_ad_empty_rows: int
+
+
+class SalesDataRow(FillAssistantPayload):
+    seller_sku: str
+    seller_skus: list[str] = []
+    name: str
+    subtotal_after_discount: float
+    matched: bool
+
+
+class SalesDataAnalysis(FillAssistantPayload):
+    filename: str
+    total_rows: int
+    valid_rows: int
+    blank_sku_rows: int
+    sku_count: int
+    product_count: int
+    matched_sku_count: int
+    unmatched_sku_count: int
+    total_amount: float
+    rows: list[SalesDataRow]

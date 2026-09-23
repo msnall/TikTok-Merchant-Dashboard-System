@@ -1,4 +1,5 @@
 import io
+import csv
 
 import pytest
 from fastapi.testclient import TestClient
@@ -36,6 +37,15 @@ def campaign_workbook(rows):
         ["Campaign ID", "广告计划名称", "成本", "Current budget", "SKU 订单数", "总收入", "ROI"],
         rows,
     )
+
+
+def affiliate_csv(rows, headers=None):
+    stream = io.StringIO()
+    fieldnames = headers or ["订单 ID", "货币单位", "预计标准佣金付款", "预计店铺广告佣金付款"]
+    writer = csv.DictWriter(stream, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return stream.getvalue().encode("utf-8-sig")
 
 
 def create_roi_settings(include_d=True):
@@ -160,3 +170,158 @@ def test_payout_config_rejects_broken_or_missing_headers():
     response = client.post("/api/fill-assistant/import-payout-config", files={"file": ("赔付.xlsx", missing)})
     assert response.status_code == 400
     assert "目标ROI" in response.json()["detail"]
+
+
+def test_affiliate_fee_analysis_sums_columns_and_treats_blanks_as_zero():
+    content = affiliate_csv([
+        {"订单 ID": "1", "货币单位": "VND", "预计标准佣金付款": "7500", "预计店铺广告佣金付款": ""},
+        {"订单 ID": "2", "货币单位": "VND", "预计标准佣金付款": "", "预计店铺广告佣金付款": "2,500"},
+        {"订单 ID": "3", "货币单位": "VND", "预计标准佣金付款": "12.35", "预计店铺广告佣金付款": "1.15"},
+    ])
+    response = client.post("/api/fill-assistant/affiliate-fees/analyze", files={"file": ("affiliate.csv", content, "text/csv")})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["total_rows"] == 3
+    assert result["currency"] == "VND"
+    assert result["standard_commission_total"] == pytest.approx(7512.35)
+    assert result["store_ad_commission_total"] == pytest.approx(2501.15)
+    assert result["total_affiliate_fee"] == pytest.approx(10013.5)
+    assert result["standard_empty_rows"] == 1
+    assert result["store_ad_empty_rows"] == 1
+
+
+def test_affiliate_fee_export_matches_analysis():
+    content = affiliate_csv([
+        {"订单 ID": "1", "货币单位": "VND", "预计标准佣金付款": "100", "预计店铺广告佣金付款": "25"},
+    ])
+    analysis = client.post("/api/fill-assistant/affiliate-fees/analyze", files={"file": ("affiliate.csv", content)}).json()
+    response = client.post("/api/fill-assistant/affiliate-fees/export", json=analysis)
+    assert response.status_code == 200
+    workbook = load_workbook(io.BytesIO(response.content), data_only=True)
+    sheet = workbook["精选联盟费用"]
+    assert sheet["A2"].value == "预计标准佣金付款"
+    assert sheet["B2"].value == 100
+    assert sheet["B3"].value == 25
+    assert sheet["B4"].value == 125
+    assert sheet["C4"].value == "VND"
+
+
+@pytest.mark.parametrize("filename, content, expected", [
+    ("empty.csv", b"", "文件没有有效数据"),
+    ("broken.xlsx", b"not a workbook", "无效或已损坏"),
+    ("missing.csv", affiliate_csv([{"预计标准佣金付款": "1"}], ["预计标准佣金付款"]), "预计店铺广告佣金付款"),
+    ("invalid.csv", affiliate_csv([{
+        "订单 ID": "1", "货币单位": "VND", "预计标准佣金付款": "abc", "预计店铺广告佣金付款": "1",
+    }]), "第 2 行"),
+])
+def test_affiliate_fee_rejects_invalid_files(filename, content, expected):
+    response = client.post("/api/fill-assistant/affiliate-fees/analyze", files={"file": (filename, content)})
+    assert response.status_code == 400
+    assert expected in response.json()["detail"]
+
+
+def sales_mapping_workbook(rows):
+    return workbook_bytes(["sellersku", "名称"], rows)
+
+
+def sales_mapping_sheet_workbook(sheet_titles):
+    workbook = Workbook()
+    workbook.active.title = "编码规则"
+    for title in sheet_titles:
+        sheet = workbook.create_sheet(title)
+        sheet["A1"] = "款式编码"
+    stream = io.BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
+def sales_orders_csv(rows, headers=None):
+    stream = io.StringIO()
+    fieldnames = headers or ["Seller SKU", "SKU Subtotal After Discount", "Order Status"]
+    writer = csv.DictWriter(stream, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return stream.getvalue().encode("utf-8-sig")
+
+
+def test_sales_data_groups_by_sku_then_maps_and_sorts():
+    mapping = client.post("/api/fill-assistant/sales/product-codes", files={
+        "file": ("codes.xlsx", sales_mapping_workbook([["A", "同名"], ["B", "同名"]]))
+    })
+    assert mapping.status_code == 200
+    analysis = client.post("/api/fill-assistant/sales/analyze", files={
+        "file": ("orders.csv", sales_orders_csv([
+            {"Seller SKU": "A", "SKU Subtotal After Discount": "2", "Order Status": "Cancelled"},
+            {"Seller SKU": "A", "SKU Subtotal After Discount": "3", "Order Status": "Completed"},
+            {"Seller SKU": "B", "SKU Subtotal After Discount": "4", "Order Status": "Cancelled"},
+            {"Seller SKU": "X", "SKU Subtotal After Discount": "9", "Order Status": "Completed"},
+        ]))
+    })
+    assert analysis.status_code == 200
+    result = analysis.json()
+    assert [(row["seller_sku"], row["name"], row["subtotal_after_discount"]) for row in result["rows"]] == [
+        ("A, B", "同名", 9), ("X", "未匹配", 9)
+    ]
+    assert result["total_rows"] == 4
+    assert result["total_amount"] == 18
+    assert result["matched_sku_count"] == 2
+
+
+def test_sales_data_excludes_blank_sku_and_rejects_invalid_amount():
+    response = client.post("/api/fill-assistant/sales/analyze", files={
+        "file": ("orders.csv", sales_orders_csv([
+            {"Seller SKU": "", "SKU Subtotal After Discount": "2", "Order Status": "Completed"},
+            {"Seller SKU": "A", "SKU Subtotal After Discount": "abc", "Order Status": "Completed"},
+        ]))
+    })
+    assert response.status_code == 400
+    assert "第 3 行" in response.json()["detail"]
+
+    valid = client.post("/api/fill-assistant/sales/analyze", files={
+        "file": ("orders.csv", sales_orders_csv([
+            {"Seller SKU": "", "SKU Subtotal After Discount": "2", "Order Status": "Completed"},
+            {"Seller SKU": "A", "SKU Subtotal After Discount": "1,234.50", "Order Status": "Completed"},
+        ]))
+    }).json()
+    assert valid["blank_sku_rows"] == 1
+    assert valid["valid_rows"] == 1
+    assert valid["total_amount"] == 1234.5
+
+
+def test_sales_mapping_conflict_is_rejected_and_export_matches_result():
+    conflict = client.post("/api/fill-assistant/sales/product-codes", files={
+        "file": ("codes.xlsx", sales_mapping_workbook([["A", "甲"], ["A", "乙"]]))
+    })
+    assert conflict.status_code == 400
+    assert "映射冲突" in conflict.json()["detail"]
+
+    client.post("/api/fill-assistant/sales/product-codes", files={
+        "file": ("codes.xlsx", sales_mapping_workbook([["A", "甲"], ["A", "甲"]]))
+    })
+    result = client.post("/api/fill-assistant/sales/analyze", files={
+        "file": ("orders.csv", sales_orders_csv([
+            {"Seller SKU": "A", "SKU Subtotal After Discount": "5", "Order Status": "Completed"},
+        ]))
+    }).json()
+    exported = client.post("/api/fill-assistant/sales/export", json=result)
+    assert exported.status_code == 200
+    sheet = load_workbook(io.BytesIO(exported.content), data_only=True)["销售数据"]
+    assert [sheet.cell(1, col).value for col in range(1, 4)] == ["Seller SKU", "名称", "SKU Subtotal After Discount"]
+    assert [sheet.cell(2, col).value for col in range(1, 4)] == ["A", "甲", 5]
+
+
+def test_sales_mapping_accepts_one_product_per_worksheet_format():
+    response = client.post("/api/fill-assistant/sales/product-codes", files={
+        "file": ("产品编码表.xlsx", sales_mapping_sheet_workbook(["A0001搓脚板", "A0002弹簧双圈钥匙扣"]))
+    })
+    assert response.status_code == 200
+    assert response.json()["unique_mappings"] == 2
+    result = client.post("/api/fill-assistant/sales/analyze", files={
+        "file": ("orders.csv", sales_orders_csv([
+            {"Seller SKU": "A0002", "SKU Subtotal After Discount": "7", "Order Status": "Completed"},
+            {"Seller SKU": "A0001", "SKU Subtotal After Discount": "3", "Order Status": "Completed"},
+        ]))
+    }).json()
+    assert [(row["seller_sku"], row["name"]) for row in result["rows"]] == [
+        ("A0002", "弹簧双圈钥匙扣"), ("A0001", "搓脚板")
+    ]

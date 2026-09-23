@@ -36,6 +36,13 @@ class Product(Base, TimestampMixin):
     market_id: Mapped[int | None] = mapped_column(ForeignKey("markets.id"))
     market = relationship("Market", back_populates="products")
 
+
+class ProductCodeMapping(Base, TimestampMixin):
+    __tablename__ = "product_code_mappings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sellersku: Mapped[str] = mapped_column(String(150), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+
 class Asset(Base, TimestampMixin):
     __tablename__ = "assets"
     id: Mapped[int] = mapped_column(primary_key=True)

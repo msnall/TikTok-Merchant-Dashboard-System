@@ -1,5 +1,7 @@
 import io
+import re
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 from zipfile import BadZipFile
 
 from openpyxl import Workbook, load_workbook
@@ -16,6 +18,14 @@ CAMPAIGN_REQUIRED_COLUMNS = {
     "revenue": "总收入",
     "actual_roi": "ROI",
 }
+
+AFFILIATE_STANDARD_COMMISSION = "预计标准佣金付款"
+AFFILIATE_STORE_AD_COMMISSION = "预计店铺广告佣金付款"
+AFFILIATE_CURRENCY = "货币单位"
+SALES_SKU_COLUMN = "Seller SKU"
+SALES_AMOUNT_COLUMN = "SKU Subtotal After Discount"
+PRODUCT_CODE_SKU_COLUMN = "sellersku"
+PRODUCT_CODE_NAME_COLUMN = "名称"
 
 
 def _strict_number(row, key, label, row_number, *, integer=False):
@@ -126,6 +136,221 @@ def analyze_product_campaign(filename, content, target_settings, known_products=
     }
 
 
+def _normalized_headers(row):
+    return {str(key or "").strip(): key for key in row}
+
+
+def _affiliate_amount(row, source_key, label, row_number):
+    raw_value = row.get(source_key)
+    if raw_value is None or str(raw_value).strip() == "":
+        return Decimal("0"), True
+    normalized = str(raw_value).strip().replace(",", "")
+    try:
+        return Decimal(normalized), False
+    except InvalidOperation as exc:
+        raise ValueError(f"联盟费用表第 {row_number} 行“{label}”不是有效数字：{raw_value}") from exc
+
+
+def analyze_affiliate_fees(filename, content):
+    rows = parse_upload(filename, content)
+    if not rows:
+        raise ValueError("联盟费用表文件没有有效数据")
+    headers = _normalized_headers(rows[0])
+    missing = [
+        label for label in (AFFILIATE_STANDARD_COMMISSION, AFFILIATE_STORE_AD_COMMISSION)
+        if label not in headers
+    ]
+    if missing:
+        raise ValueError(f"联盟费用表缺少必要字段：{'、'.join(missing)}")
+
+    standard_total = Decimal("0")
+    store_ad_total = Decimal("0")
+    standard_empty_rows = 0
+    store_ad_empty_rows = 0
+    currencies = set()
+    for row_number, row in enumerate(rows, start=2):
+        standard, standard_empty = _affiliate_amount(
+            row, headers[AFFILIATE_STANDARD_COMMISSION], AFFILIATE_STANDARD_COMMISSION, row_number
+        )
+        store_ad, store_ad_empty = _affiliate_amount(
+            row, headers[AFFILIATE_STORE_AD_COMMISSION], AFFILIATE_STORE_AD_COMMISSION, row_number
+        )
+        standard_total += standard
+        store_ad_total += store_ad
+        standard_empty_rows += standard_empty
+        store_ad_empty_rows += store_ad_empty
+        currency_key = headers.get(AFFILIATE_CURRENCY)
+        currency = str(row.get(currency_key) or "").strip() if currency_key else ""
+        if currency:
+            currencies.add(currency)
+    if len(currencies) > 1:
+        raise ValueError(f"联盟费用表包含多个货币单位：{'、'.join(sorted(currencies))}")
+    return {
+        "filename": filename,
+        "total_rows": len(rows),
+        "standard_commission_total": float(standard_total),
+        "store_ad_commission_total": float(store_ad_total),
+        "total_affiliate_fee": float(standard_total + store_ad_total),
+        "currency": next(iter(currencies), None),
+        "standard_empty_rows": standard_empty_rows,
+        "store_ad_empty_rows": store_ad_empty_rows,
+    }
+
+
+def _column_key(value):
+    return "".join(str(value or "").split()).replace("_", "").replace("-", "").casefold()
+
+
+def _required_source_columns(row, required, source_label):
+    headers = {_column_key(key): key for key in row}
+    missing = [label for label in required if _column_key(label) not in headers]
+    if missing:
+        raise ValueError(f"{source_label}缺少必要字段：{'、'.join(missing)}")
+    return {label: headers[_column_key(label)] for label in required}
+
+
+def parse_product_code_mappings(filename, content):
+    rows = parse_upload(filename, content)
+    columns = None
+    if rows:
+        try:
+            columns = _required_source_columns(
+                rows[0], (PRODUCT_CODE_SKU_COLUMN, PRODUCT_CODE_NAME_COLUMN), "产品编码文件"
+            )
+        except ValueError:
+            columns = None
+
+    # Some product-code workbooks use one product per worksheet. In that
+    # format the worksheet title is ``Seller SKU + 产品名称`` and the first
+    # sheet is a non-data rule sheet. Keep accepting the regular two-column
+    # format above, then fall back to worksheet-title parsing for xlsx/xlsm.
+    if columns is None and filename.lower().endswith((".xlsx", ".xlsm")):
+        try:
+            workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        except (BadZipFile, OSError, ValueError) as exc:
+            raise ValueError("产品编码 Excel 文件无效或已损坏") from exc
+        rows = []
+        for sheet in workbook.worksheets:
+            title = str(sheet.title or "").strip()
+            match = re.match(r"^(.+?)([\u4e00-\u9fff].*)$", title)
+            if not match or not re.search(r"\d", match.group(1)):
+                continue
+            rows.append({PRODUCT_CODE_SKU_COLUMN: match.group(1).strip(), PRODUCT_CODE_NAME_COLUMN: match.group(2).strip()})
+        if not rows:
+            raise ValueError("产品编码文件缺少必要字段：sellersku、名称")
+        columns = {PRODUCT_CODE_SKU_COLUMN: PRODUCT_CODE_SKU_COLUMN, PRODUCT_CODE_NAME_COLUMN: PRODUCT_CODE_NAME_COLUMN}
+    if not rows:
+        raise ValueError("产品编码文件没有有效数据")
+    mappings = {}
+    source_rows = {}
+    duplicate_rows = 0
+    for row_number, row in enumerate(rows, start=2):
+        seller_sku = str(row.get(columns[PRODUCT_CODE_SKU_COLUMN]) or "").strip()
+        name = str(row.get(columns[PRODUCT_CODE_NAME_COLUMN]) or "").strip()
+        if not seller_sku and not name:
+            continue
+        if not seller_sku:
+            raise ValueError(f"产品编码第 {row_number} 行 sellersku 为空")
+        if not name:
+            raise ValueError(f"产品编码第 {row_number} 行名称为空")
+        if seller_sku in mappings:
+            if mappings[seller_sku] != name:
+                first_row = source_rows[seller_sku]
+                raise ValueError(
+                    f"产品编码映射冲突：{seller_sku} 在第 {first_row} 行为“{mappings[seller_sku]}”，"
+                    f"第 {row_number} 行为“{name}”"
+                )
+            duplicate_rows += 1
+            continue
+        mappings[seller_sku] = name
+        source_rows[seller_sku] = row_number
+    if not mappings:
+        raise ValueError("产品编码文件中没有可导入的 sellersku 映射")
+    return {
+        "source_rows": len(rows),
+        "duplicate_rows": duplicate_rows,
+        "mappings": mappings,
+    }
+
+
+def _sales_amount(row, source_key, row_number):
+    raw_value = row.get(source_key)
+    normalized = str(raw_value or "").strip().replace(",", "")
+    if not normalized:
+        raise ValueError(f"全部订单第 {row_number} 行“{SALES_AMOUNT_COLUMN}”为空")
+    try:
+        amount = Decimal(normalized)
+    except InvalidOperation as exc:
+        raise ValueError(
+            f"全部订单第 {row_number} 行“{SALES_AMOUNT_COLUMN}”不是有效数字：{raw_value}"
+        ) from exc
+    if not amount.is_finite():
+        raise ValueError(
+            f"全部订单第 {row_number} 行“{SALES_AMOUNT_COLUMN}”不是有效数字：{raw_value}"
+        )
+    return amount
+
+
+def analyze_sales_data(filename, content, product_code_mappings):
+    rows = parse_upload(filename, content)
+    if not rows:
+        raise ValueError("全部订单文件没有有效数据")
+    columns = _required_source_columns(
+        rows[0], (SALES_SKU_COLUMN, SALES_AMOUNT_COLUMN), "全部订单文件"
+    )
+    grouped = defaultdict(Decimal)
+    total_amount = Decimal("0")
+    blank_sku_rows = 0
+    valid_rows = 0
+    for row_number, row in enumerate(rows, start=2):
+        seller_sku = str(row.get(columns[SALES_SKU_COLUMN]) or "").strip()
+        amount = _sales_amount(row, columns[SALES_AMOUNT_COLUMN], row_number)
+        if not seller_sku:
+            blank_sku_rows += 1
+            continue
+        grouped[seller_sku] += amount
+        total_amount += amount
+        valid_rows += 1
+
+    # Aggregate by product name only after SKU totals have been calculated.
+    # Unknown SKUs remain separate so one "未匹配" row cannot hide codes.
+    merged = {}
+    for seller_sku, subtotal in grouped.items():
+        name = product_code_mappings.get(seller_sku)
+        key = ("name", name) if name is not None else ("sku", seller_sku)
+        entry = merged.setdefault(key, {
+            "name": name or "未匹配",
+            "seller_skus": [],
+            "subtotal": Decimal("0"),
+            "matched": name is not None,
+        })
+        entry["seller_skus"].append(seller_sku)
+        entry["subtotal"] += subtotal
+    result_rows = []
+    for entry in sorted(merged.values(), key=lambda item: (-item["subtotal"], item["name"], item["seller_skus"])):
+        seller_skus = sorted(entry["seller_skus"])
+        result_rows.append({
+            "seller_sku": ", ".join(seller_skus),
+            "seller_skus": seller_skus,
+            "name": entry["name"],
+            "subtotal_after_discount": float(entry["subtotal"]),
+            "matched": entry["matched"],
+        })
+    matched_sku_count = sum(1 for seller_sku in grouped if seller_sku in product_code_mappings)
+    return {
+        "filename": filename,
+        "total_rows": len(rows),
+        "valid_rows": valid_rows,
+        "blank_sku_rows": blank_sku_rows,
+        "sku_count": len(grouped),
+        "product_count": len(result_rows),
+        "matched_sku_count": matched_sku_count,
+        "unmatched_sku_count": len(grouped) - matched_sku_count,
+        "total_amount": float(total_amount),
+        "rows": result_rows,
+    }
+
+
 def parse_payout_config(content):
     try:
         workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -230,5 +455,46 @@ def export_payout_workbook(result):
         "编号", "广告计划名称", "产品", "SKU订单数", "总收入", "目标ROI",
         "赔付ROI", "实际消耗", "赔付金额", "实际ROI", "Current budget",
     ], detail_rows, ("E", "F", "G", "H", "I", "J", "K"))
+    stream = io.BytesIO(); workbook.save(stream); stream.seek(0)
+    return stream
+
+
+def export_affiliate_fee_workbook(result):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "精选联盟费用"
+    rows = [
+        ["预计标准佣金付款", result.standard_commission_total, result.currency],
+        ["预计店铺广告佣金付款", result.store_ad_commission_total, result.currency],
+        ["精选联盟总费用", result.total_affiliate_fee, result.currency],
+    ]
+    _write_table(sheet, ["项目", "金额", "币种"], rows, ("B",))
+    sheet["A4"].font = Font(bold=True)
+    sheet["B4"].font = Font(bold=True)
+    sheet["C4"].font = Font(bold=True)
+    sheet["A4"].fill = SUBHEADER_FILL
+    sheet["B4"].fill = SUBHEADER_FILL
+    sheet["C4"].fill = SUBHEADER_FILL
+    stream = io.BytesIO(); workbook.save(stream); stream.seek(0)
+    return stream
+
+
+def export_sales_data_workbook(result):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "销售数据"
+    rows = [
+        [item.seller_sku, item.name, item.subtotal_after_discount]
+        for item in sorted(
+            result.rows,
+            key=lambda item: (-item.subtotal_after_discount, item.seller_sku),
+        )
+    ]
+    _write_table(
+        sheet,
+        ["Seller SKU", "名称", "SKU Subtotal After Discount"],
+        rows,
+        ("C",),
+    )
     stream = io.BytesIO(); workbook.save(stream); stream.seek(0)
     return stream
