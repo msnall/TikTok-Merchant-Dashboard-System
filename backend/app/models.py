@@ -74,6 +74,8 @@ class Script(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(200))
     source_platform: Mapped[str | None] = mapped_column(String(50))
     source_url: Mapped[str | None] = mapped_column(String(500))
+    audio_path: Mapped[str | None] = mapped_column(String(500))
+    audio_file_name: Mapped[str | None] = mapped_column(String(255))
     market_id: Mapped[int | None] = mapped_column(ForeignKey("markets.id"))
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"))
     script_type: Mapped[str | None] = mapped_column(String(50))
@@ -89,6 +91,23 @@ class Script(Base, TimestampMixin):
     market = relationship("Market")
     product = relationship("Product")
     tag_entities = relationship("Tag", secondary=script_tags, back_populates="scripts")
+    segments = relationship("ScriptSegment", back_populates="script", cascade="all, delete-orphan", order_by="ScriptSegment.order_index")
+
+class ScriptSegment(Base, TimestampMixin):
+    __tablename__ = "script_segments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    script_id: Mapped[int] = mapped_column(ForeignKey("scripts.id", ondelete="CASCADE"), index=True)
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    role: Mapped[str] = mapped_column(String(20), default="body")
+    start_second: Mapped[float] = mapped_column(Float, default=0)
+    end_second: Mapped[float] = mapped_column(Float, default=3)
+    spoken_text: Mapped[str] = mapped_column(Text)
+    visual_direction: Mapped[str | None] = mapped_column(Text)
+    recommended_asset_type: Mapped[str | None] = mapped_column(String(50))
+    is_key: Mapped[bool] = mapped_column(Boolean, default=False)
+    highlight_text: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    script = relationship("Script", back_populates="segments")
 
 class ContentTemplate(Base, TimestampMixin):
     __tablename__ = "content_templates"
@@ -131,9 +150,14 @@ class MixProjectAsset(Base):
     start_second: Mapped[float | None] = mapped_column(Float)
     end_second: Mapped[float | None] = mapped_column(Float)
     usage_type: Mapped[str | None] = mapped_column(String(30))
+    script_segment_id: Mapped[int | None] = mapped_column(ForeignKey("script_segments.id", ondelete="SET NULL"))
+    script_text_snapshot: Mapped[str | None] = mapped_column(Text)
+    source_start_second: Mapped[float | None] = mapped_column(Float)
+    source_end_second: Mapped[float | None] = mapped_column(Float)
     notes: Mapped[str | None] = mapped_column(Text)
     mix_project = relationship("MixProject", back_populates="assets")
     asset = relationship("Asset")
+    script_segment = relationship("ScriptSegment")
 
 class VideoWork(Base, TimestampMixin):
     __tablename__ = "video_works"

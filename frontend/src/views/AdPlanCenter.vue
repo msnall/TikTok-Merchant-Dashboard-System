@@ -41,10 +41,17 @@
     </div>
 
     <section class="workspace-panel ad-plan-panel">
-      <div class="section-head ad-toolbar">
-        <div>
+      <div class="ad-toolbar">
+        <div class="ad-panel-heading">
+          <div>
           <h3>当前广告计划</h3>
           <span class="muted">目标 ROI 按“产品 + A/B/C/D”同步；日期不同不会改变目标值。</span>
+          </div>
+          <div class="filter-result">
+            <span>当前显示</span>
+            <strong>{{ filteredPlans.length }}</strong>
+            <small>/ {{ plans.length }} 条</small>
+          </div>
         </div>
         <div class="ad-filter-row">
           <el-input v-model="keyword" clearable placeholder="搜索计划、产品或 Campaign ID" @keyup.enter="load" />
@@ -58,11 +65,15 @@
             <el-option label="全部处理状态" value="all" /><el-option label="待处理" value="pending" /><el-option label="已处理" value="handled" />
           </el-select>
         </div>
-        <el-radio-group v-model="activeStatus" size="small">
-          <el-radio-button v-for="item in statusOptions" :key="item.value" :value="item.value">
-            {{ item.label }} {{ item.value ? statusCount(item.value) : plans.length }}
-          </el-radio-button>
-        </el-radio-group>
+        <div class="status-filter-bar">
+          <span class="status-filter-label">计划状态</span>
+          <el-radio-group v-model="activeStatus" size="small">
+            <el-radio-button v-for="item in statusOptions" :key="item.value" :value="item.value">
+              <span>{{ item.label }}</span>
+              <b>{{ item.value ? statusCount(item.value) : plans.length }}</b>
+            </el-radio-button>
+          </el-radio-group>
+        </div>
       </div>
 
       <el-table v-loading="loading" :data="filteredPlans" stripe empty-text="暂无符合条件的广告计划" @sort-change="sortPlans">

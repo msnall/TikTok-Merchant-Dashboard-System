@@ -10,8 +10,8 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from .db import Base, engine, get_db
 from .config import settings
-from .models import Market, Product, Asset, Script, ContentTemplate, MixProject, MixProjectAsset, VideoWork, Tag, AssetFile, ContentVersion
-from .schemas import RecommendationRequest, AdoptRecommendationRequest, MarketCreate, ProductCreate, AssetCreate, ScriptCreate, TemplateCreate, MixProjectCreate, MixProjectAssetCreate, VideoWorkCreate, TagCreate
+from .models import Market, Product, Asset, Script, ScriptSegment, ContentTemplate, MixProject, MixProjectAsset, VideoWork, Tag, AssetFile, ContentVersion
+from .schemas import RecommendationRequest, AdoptRecommendationRequest, MarketCreate, ProductCreate, AssetCreate, ScriptCreate, ScriptSegmentCreate, TemplateCreate, MixProjectCreate, MixProjectAssetCreate, VideoWorkCreate, TagCreate
 from .services import recommendations
 from .semantic import embed, item_text, cosine, stored_embedding
 from . import ad_models
@@ -45,8 +45,8 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
 async def unexpected_error_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "服务器内部错误"})
 
-MODEL_MAP = {"markets": Market, "products": Product, "assets": Asset, "scripts": Script, "templates": ContentTemplate, "mix-projects": MixProject, "mix-project-assets": MixProjectAsset, "videos": VideoWork, "tags": Tag, "asset-files": AssetFile, "content-versions": ContentVersion}
-SCHEMA_MAP = {Market: MarketCreate, Product: ProductCreate, Asset: AssetCreate, Script: ScriptCreate, ContentTemplate: TemplateCreate, MixProject: MixProjectCreate, MixProjectAsset: MixProjectAssetCreate, VideoWork: VideoWorkCreate, Tag: TagCreate}
+MODEL_MAP = {"markets": Market, "products": Product, "assets": Asset, "scripts": Script, "script-segments": ScriptSegment, "templates": ContentTemplate, "mix-projects": MixProject, "mix-project-assets": MixProjectAsset, "videos": VideoWork, "tags": Tag, "asset-files": AssetFile, "content-versions": ContentVersion}
+SCHEMA_MAP = {Market: MarketCreate, Product: ProductCreate, Asset: AssetCreate, Script: ScriptCreate, ScriptSegment: ScriptSegmentCreate, ContentTemplate: TemplateCreate, MixProject: MixProjectCreate, MixProjectAsset: MixProjectAssetCreate, VideoWork: VideoWorkCreate, Tag: TagCreate}
 ID_FIELDS = {m: {c.key for c in inspect(m).columns} for m in MODEL_MAP.values()}
 
 def validate_payload(schema, payload):
@@ -62,7 +62,9 @@ def serialize(obj):
         if rel is not None: data[key] = {"id": rel.id, "name": getattr(rel, "name", getattr(rel, "title", None))}
     if isinstance(obj, MixProject):
         data["assets"] = [serialize(x) for x in sorted(obj.assets, key=lambda entry: entry.order_index)]
-        data["timeline"] = [{"start_second": entry.start_second, "end_second": entry.end_second, "usage_type": entry.usage_type, "asset": serialize(entry.asset)} for entry in sorted(obj.assets, key=lambda entry: entry.order_index)]
+        data["timeline"] = [{"id": entry.id, "start_second": entry.start_second, "end_second": entry.end_second, "usage_type": entry.usage_type, "script_segment_id": entry.script_segment_id, "script_text_snapshot": entry.script_text_snapshot, "source_start_second": entry.source_start_second, "source_end_second": entry.source_end_second, "script_segment": serialize(entry.script_segment) if entry.script_segment else None, "asset": serialize(entry.asset)} for entry in sorted(obj.assets, key=lambda entry: entry.order_index)]
+    if isinstance(obj, Script):
+        data["segments"] = [serialize(segment) for segment in sorted(obj.segments, key=lambda entry: entry.order_index)]
     return data
 
 @app.on_event("startup")
@@ -70,7 +72,7 @@ def startup():
     Base.metadata.create_all(bind=engine)
     # Keep existing local SQLite databases usable after additive V2 fields are introduced.
     with engine.begin() as connection:
-        for table, columns in (("assets", ("semantic_summary", "embedding_json")), ("scripts", ("embedding_json",)), ("content_templates", ("embedding_json",))):
+        for table, columns in (("assets", ("semantic_summary", "embedding_json")), ("scripts", ("embedding_json", "audio_path", "audio_file_name")), ("content_templates", ("embedding_json",))):
             existing = {column[1] for column in connection.exec_driver_sql(f"PRAGMA table_info({table})")} if settings.database_url.startswith("sqlite") else {c[0] for c in connection.exec_driver_sql(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}'")}
             for column in columns:
                 if column not in existing: connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
@@ -145,9 +147,55 @@ def make_crud(path, model):
     def delete_item(item_id: int, db: Session = Depends(get_db)):
         obj = db.get(model, item_id)
         if not obj: raise HTTPException(404, "Item not found")
+        if model is MixProject:
+            # Keep completed or pending video records, but detach them from the
+            # project being removed. Generated workbench tasks must not remain
+            # as dead links after their source project is gone.
+            db.query(VideoWork).filter(VideoWork.mix_project_id == item_id).update(
+                {VideoWork.mix_project_id: None}, synchronize_session=False
+            )
+            db.query(work_models.WorkTask).filter(
+                work_models.WorkTask.related_type == "mix_project",
+                work_models.WorkTask.related_id == item_id,
+            ).delete(synchronize_session=False)
         db.delete(obj); db.commit()
 
 for _path, _model in MODEL_MAP.items(): make_crud(_path, _model)
+
+@app.post("/api/scripts/{script_id}/audio")
+async def upload_script_audio(script_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    script = db.get(Script, script_id)
+    if not script:
+        raise HTTPException(404, "Script not found")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm"}:
+        raise HTTPException(400, "Unsupported audio extension")
+    storage_root = Path(settings.storage_dir).resolve()
+    target_dir = (storage_root / "scripts").resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = (target_dir / f"script-{script_id}{suffix}").resolve()
+    if target.parent != target_dir:
+        raise HTTPException(400, "Invalid filename")
+    temporary = target.with_name(f"{target.name}.uploading")
+    size = 0
+    try:
+        with temporary.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > settings.max_upload_size:
+                    raise HTTPException(413, "File too large")
+                output.write(chunk)
+        old_target = (storage_root / script.audio_path).resolve() if script.audio_path else None
+        temporary.replace(target)
+        if old_target and old_target != target and old_target.parent == target_dir:
+            old_target.unlink(missing_ok=True)
+    finally:
+        temporary.unlink(missing_ok=True)
+    script.audio_path = str(target.relative_to(storage_root))
+    script.audio_file_name = Path(file.filename or target.name).name[:255]
+    db.commit()
+    db.refresh(script)
+    return serialize(script)
 
 @app.post("/api/assets/{item_id}/file")
 async def upload_asset_file(item_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -215,29 +263,67 @@ async def upload_video_file(video_id: int, file: UploadFile = File(...), db: Ses
 @app.post("/api/assistant/recommend")
 def recommend(payload: RecommendationRequest, db: Session = Depends(get_db)):
     ranked = recommendations(db, **payload.model_dump())
-    response = {}
-    for key, rows in ranked.items():
-        if key == "mix_plans":
-            response[key] = rows
-        else:
-            response[key] = [{"score": row["score"], "reasons": row["reasons"], "score_breakdown": row.get("score_breakdown", {}), **serialize(row["item"])} for row in rows]
-    return response
+    plans_by_script = {plan["script_id"]: plan for plan in ranked.get("mix_plans", [])}
+    return {"scripts": [{"score": row["score"], "reasons": row["reasons"], "score_breakdown": row.get("score_breakdown", {}),
+                         "proposed_plan": plans_by_script.get(row["item"].id), **serialize(row["item"])}
+                        for row in ranked.get("scripts", [])]}
 
 @app.post("/api/assistant/adopt", status_code=201)
 def adopt_recommendation(payload: AdoptRecommendationRequest, db: Session = Depends(get_db)):
-    ranked = recommendations(db, **payload.model_dump(exclude={"plan_index", "name"}))
+    ranked = recommendations(db, **payload.model_dump(exclude={"plan_index", "script_id", "name"}))
     plans = ranked.get("mix_plans", [])
-    if payload.plan_index >= len(plans):
+    plan = next((item for item in plans if item["script_id"] == payload.script_id), None) if payload.script_id else None
+    if plan is None and payload.plan_index < len(plans):
+        plan = plans[payload.plan_index]
+    if plan is None:
         raise HTTPException(404, "推荐方案不存在，请重新获取推荐")
-    plan = plans[payload.plan_index]
     project = MixProject(name=payload.name or f"推荐混剪方案 {plan['id']}", market_id=payload.market_id,
-                         product_id=payload.product_id, script_id=plan["script_id"], template_id=plan["template_id"],
-                         target_duration=payload.duration, status="draft", notes="由创作助手推荐采用")
+                         product_id=payload.product_id, script_id=plan["script_id"], template_id=None,
+                         target_duration=plan["target_duration"], status="draft", notes="由创作助手按分段脚本生成")
     db.add(project); db.flush()
     for entry in plan["timeline"]:
         db.add(MixProjectAsset(mix_project_id=project.id, **entry))
     db.commit(); db.refresh(project)
     return {"project": serialize(project), "plan": plan}
+
+@app.get("/api/scripts/{script_id}/segments")
+def list_script_segments(script_id: int, db: Session = Depends(get_db)):
+    if not db.get(Script, script_id):
+        raise HTTPException(404, "Script not found")
+    rows = db.scalars(select(ScriptSegment).where(ScriptSegment.script_id == script_id).order_by(ScriptSegment.order_index)).all()
+    return [serialize(row) for row in rows]
+
+@app.put("/api/scripts/{script_id}/segments")
+def replace_script_segments(script_id: int, entries: list[ScriptSegmentCreate], db: Session = Depends(get_db)):
+    script = db.get(Script, script_id)
+    if not script:
+        raise HTTPException(404, "Script not found")
+    allowed_roles = {"hook", "body", "ending", "cta"}
+    intervals = []
+    for entry in entries:
+        if entry.role not in allowed_roles:
+            raise HTTPException(422, "role must be hook, body, ending, or cta")
+        if entry.end_second <= entry.start_second:
+            raise HTTPException(422, "end_second must be greater than start_second")
+        intervals.append((entry.start_second, entry.end_second))
+    for previous, current in zip(sorted(intervals), sorted(intervals)[1:]):
+        if current[0] < previous[1]:
+            raise HTTPException(422, "script segments cannot overlap")
+    db.query(ScriptSegment).filter(ScriptSegment.script_id == script_id).delete(synchronize_session=False)
+    grouped = {role: [] for role in allowed_roles}
+    created = []
+    for index, entry in enumerate(entries):
+        values = entry.model_dump(exclude={"script_id", "order_index"})
+        segment = ScriptSegment(script_id=script_id, order_index=index, **values)
+        db.add(segment)
+        created.append(segment)
+        grouped[entry.role].append(entry.spoken_text)
+    for role in allowed_roles:
+        setattr(script, role, "\n".join(grouped[role]) or None)
+    script.full_text = "\n".join(entry.spoken_text for entry in entries) or None
+    script.duration = max((entry.end_second for entry in entries), default=script.duration)
+    db.commit()
+    return [serialize(row) for row in created]
 
 @app.get("/api/search")
 def semantic_search(q: str = Query(..., min_length=1), entity: str = Query("assets"), type: str | None = None, market_id: int | None = None, product_id: int | None = None, tag_id: int | None = None, source_platform: str | None = None, duration_min: float | None = Query(None, ge=0), duration_max: float | None = Query(None, ge=0), limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db)):
@@ -279,8 +365,12 @@ def replace_timeline(project_id: int, entries: list[MixProjectAssetCreate], db: 
     intervals = []
     for entry in entries:
         if not db.get(Asset, entry.asset_id): raise HTTPException(404, f"Asset {entry.asset_id} not found")
+        if entry.script_segment_id is not None and not db.get(ScriptSegment, entry.script_segment_id):
+            raise HTTPException(404, f"Script segment {entry.script_segment_id} not found")
         if entry.start_second is not None and entry.start_second < 0: raise HTTPException(422, "start_second must be >= 0")
         if entry.start_second is not None and entry.end_second is not None and entry.end_second <= entry.start_second: raise HTTPException(422, "end_second must be greater than start_second")
+        if entry.source_start_second is not None and entry.source_end_second is not None and entry.source_end_second <= entry.source_start_second:
+            raise HTTPException(422, "source_end_second must be greater than source_start_second")
         if target is not None and entry.end_second is not None and entry.end_second > target: raise HTTPException(422, "end_second exceeds target_duration")
         if entry.start_second is not None and entry.end_second is not None:
             intervals.append((entry.start_second, entry.end_second))
@@ -304,7 +394,9 @@ def clone_mix_project(project_id: int, db: Session = Depends(get_db)):
     for entry in sorted(source.assets, key=lambda row: row.order_index):
         db.add(MixProjectAsset(mix_project_id=clone.id, asset_id=entry.asset_id, order_index=entry.order_index,
                                start_second=entry.start_second, end_second=entry.end_second,
-                               usage_type=entry.usage_type, notes=entry.notes))
+                               usage_type=entry.usage_type, script_segment_id=entry.script_segment_id,
+                               script_text_snapshot=entry.script_text_snapshot, source_start_second=entry.source_start_second,
+                               source_end_second=entry.source_end_second, notes=entry.notes))
     db.commit(); db.refresh(clone)
     return serialize(clone)
 

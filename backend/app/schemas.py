@@ -66,6 +66,19 @@ class ScriptCreate(Payload):
 class ScriptUpdate(ScriptCreate):
     title: str | None = Field(default=None, min_length=1, max_length=200)
 
+class ScriptSegmentCreate(Payload):
+    script_id: int
+    order_index: int = Field(default=0, ge=0)
+    role: str = Field(default="body", max_length=20)
+    start_second: float = Field(default=0, ge=0)
+    end_second: float = Field(gt=0)
+    spoken_text: str = Field(min_length=1)
+    visual_direction: str | None = None
+    recommended_asset_type: str | None = Field(default=None, max_length=50)
+    is_key: bool = False
+    highlight_text: str | None = None
+    notes: str | None = None
+
 class TemplateCreate(Payload):
     name: str = Field(min_length=1, max_length=200)
     market_id: int | None = None
@@ -112,6 +125,10 @@ class MixProjectAssetCreate(Payload):
     start_second: float | None = Field(default=None, ge=0)
     end_second: float | None = Field(default=None, gt=0)
     usage_type: str | None = None
+    script_segment_id: int | None = None
+    script_text_snapshot: str | None = None
+    source_start_second: float | None = Field(default=None, ge=0)
+    source_end_second: float | None = Field(default=None, gt=0)
     notes: str | None = None
 
 class TagCreate(Payload):
@@ -127,4 +144,5 @@ class RecommendationRequest(Payload):
 
 class AdoptRecommendationRequest(RecommendationRequest):
     plan_index: int = Field(default=0, ge=0, le=9)
+    script_id: int | None = None
     name: str | None = Field(default=None, max_length=200)

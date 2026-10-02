@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import Base, engine
+from app.config import settings
 from app.ad_services import evaluate_snapshot, parse_plan_name
 
 
@@ -44,6 +45,30 @@ def test_validation_not_found_and_duplicate_constraint():
     assert client.post("/api/tags", json={"name": "hook"}).status_code == 409
 
 
+def test_script_audio_upload_and_replace(clean_database, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "storage_dir", str(tmp_path))
+    script = client.post("/api/scripts", json={"title": "Audio script", **clean_database}).json()
+    uploaded = client.post(
+        f"/api/scripts/{script['id']}/audio",
+        files={"file": ("voice.mp3", b"ID3-test-audio", "audio/mpeg")},
+    )
+    assert uploaded.status_code == 200
+    assert uploaded.json()["audio_path"].endswith(".mp3")
+    assert uploaded.json()["audio_file_name"] == "voice.mp3"
+
+    replaced = client.post(
+        f"/api/scripts/{script['id']}/audio",
+        files={"file": ("voice.wav", b"RIFF-test-audio", "audio/wav")},
+    )
+    assert replaced.status_code == 200
+    assert replaced.json()["audio_path"].endswith(".wav")
+    assert replaced.json()["audio_file_name"] == "voice.wav"
+    assert client.post(
+        f"/api/scripts/{script['id']}/audio",
+        files={"file": ("voice.txt", b"invalid", "text/plain")},
+    ).status_code == 400
+
+
 def test_tag_and_combined_filters(clean_database):
     tag = client.post("/api/tags", json={"name": "problem"}).json()
     asset = client.post("/api/assets", json={
@@ -62,29 +87,80 @@ def test_tag_and_combined_filters(clean_database):
     assert searched and searched[0]["id"] == asset["id"]
 
 
-def test_recommendation_returns_four_sections(clean_database):
+def _replace_script_segments(script_id):
+    segments = [
+        {"script_id": script_id, "order_index": 0, "role": "hook", "start_second": 0, "end_second": 3,
+         "spoken_text": "Do you still struggle with breakfast?", "visual_direction": "Show the problem", "recommended_asset_type": "usage", "is_key": True, "highlight_text": "breakfast"},
+        {"script_id": script_id, "order_index": 1, "role": "body", "start_second": 3, "end_second": 12,
+         "spoken_text": "Use this cooker in three easy steps.", "visual_direction": "Demonstrate the product", "recommended_asset_type": "usage"},
+        {"script_id": script_id, "order_index": 2, "role": "ending", "start_second": 12, "end_second": 17,
+         "spoken_text": "The finished eggs are smooth.", "visual_direction": "Show the result", "recommended_asset_type": "result", "is_key": True},
+        {"script_id": script_id, "order_index": 3, "role": "cta", "start_second": 17, "end_second": 20,
+         "spoken_text": "Order yours today.", "visual_direction": "Point to the product link", "recommended_asset_type": "cta", "is_key": True},
+    ]
+    response = client.put(f"/api/scripts/{script_id}/segments", json=segments)
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_recommendation_returns_segmented_scripts_only(clean_database):
     common = {"market_id": clean_database["market_id"], "product_id": clean_database["product_id"]}
-    client.post("/api/assets", json={"name": "Sunscreen demo", "asset_type": "pain_point", "duration": 20, **common})
-    client.post("/api/scripts", json={"title": "Problem hook", "script_type": "pain_point", "duration": 20, **common})
-    client.post("/api/templates", json={"name": "Pain point flow", "template_type": "pain_point", "recommended_duration": 20, **common})
-    response = client.post("/api/assistant/recommend", json={"content_type": "pain_point", "duration": 20, "keywords": ["sunscreen", "problem"]})
+    client.post("/api/assets", json={"name": "Sunscreen usage", "asset_type": "usage", "duration": 20, **common})
+    script = client.post("/api/scripts", json={"title": "Problem hook", "script_type": "pain_point", "duration": 20, **common}).json()
+    segments = _replace_script_segments(script["id"])
+    response = client.post("/api/assistant/recommend", json={**common, "content_type": "pain_point", "duration": 20, "keywords": ["sunscreen", "problem"]})
+    assert response.status_code == 200
     data = response.json()
-    assert set(("assets", "scripts", "templates", "mix_plans")) <= data.keys()
-    assert data["assets"][0]["reasons"]
-    assert data["mix_plans"] and {"script_id", "template_id", "asset_ids", "reasons"} <= data["mix_plans"][0].keys()
-    assert "score_breakdown" in data["mix_plans"][0]
+    assert set(data) == {"scripts"}
+    assert data["scripts"][0]["id"] == script["id"]
+    assert data["scripts"][0]["segments"] == segments
+    assert data["scripts"][0]["proposed_plan"]["script_id"] == script["id"]
+    assert data["scripts"][0]["proposed_plan"]["timeline"][0]["script_segment_id"] == segments[0]["id"]
+    assert "score_breakdown" in data["scripts"][0]
 
 def test_adopt_recommendation_creates_project_and_timeline(clean_database):
     common = {"market_id": clean_database["market_id"], "product_id": clean_database["product_id"]}
-    for index in range(3):
-        client.post("/api/assets", json={"name": f"Adopt clip {index}", "asset_type": "pain_point", "duration": 3, **common})
-    client.post("/api/scripts", json={"title": "Adopt hook", "script_type": "pain_point", "duration": 20, **common})
-    client.post("/api/templates", json={"name": "Adopt flow", "template_type": "pain_point", "recommended_duration": 20, **common})
-    response = client.post("/api/assistant/adopt", json={"market_id": common["market_id"], "product_id": common["product_id"], "content_type": "pain_point", "duration": 20, "keywords": ["adopt"], "plan_index": 0})
+    for asset_type in ("usage", "result", "cta"):
+        client.post("/api/assets", json={"name": f"Adopt {asset_type}", "asset_type": asset_type, "duration": 20, **common})
+    script = client.post("/api/scripts", json={"title": "Adopt hook", "script_type": "pain_point", "duration": 20, **common}).json()
+    segments = _replace_script_segments(script["id"])
+    response = client.post("/api/assistant/adopt", json={**common, "content_type": "pain_point", "duration": 20, "keywords": ["adopt"], "script_id": script["id"]})
     assert response.status_code == 201
     project = response.json()["project"]
-    assert project["id"] and len(project["timeline"]) == 3 and response.json()["plan"]["score_breakdown"]
+    assert project["id"] and len(project["timeline"]) == 4 and response.json()["plan"]["score_breakdown"]
+    assert project["script_id"] == script["id"] and project["template_id"] is None
+    assert [entry["script_segment_id"] for entry in project["timeline"]] == [entry["id"] for entry in segments]
+    assert project["timeline"][0]["script_text_snapshot"] == segments[0]["spoken_text"]
+    assert project["timeline"][0]["source_start_second"] == 0
     assert response.json()["plan"]["timeline"][-1]["end_second"] == 20
+
+    replacement = [{"script_id": script["id"], "role": "body", "start_second": 0, "end_second": 20,
+                    "spoken_text": "A revised script keeps the old project snapshot."}]
+    assert client.put(f"/api/scripts/{script['id']}/segments", json=replacement).status_code == 200
+    historical_timeline = client.get(f"/api/mix-projects/{project['id']}").json()["timeline"]
+    assert all(entry["script_segment_id"] is None for entry in historical_timeline)
+    assert historical_timeline[0]["script_text_snapshot"] == segments[0]["spoken_text"]
+
+
+def test_script_segment_validation_and_legacy_field_sync(clean_database):
+    script = client.post("/api/scripts", json={"title": "Segment validation", **clean_database}).json()
+    segments = _replace_script_segments(script["id"])
+    reloaded = client.get(f"/api/scripts/{script['id']}").json()
+    assert reloaded["hook"] == segments[0]["spoken_text"]
+    assert reloaded["body"] == segments[1]["spoken_text"]
+    assert reloaded["ending"] == segments[2]["spoken_text"]
+    assert reloaded["cta"] == segments[3]["spoken_text"]
+    assert reloaded["full_text"] == "\n".join(segment["spoken_text"] for segment in segments)
+    assert reloaded["duration"] == 20
+
+    invalid_role = [{"script_id": script["id"], "role": "intro", "start_second": 0, "end_second": 2, "spoken_text": "Invalid"}]
+    assert client.put(f"/api/scripts/{script['id']}/segments", json=invalid_role).status_code == 422
+    overlapping = [
+        {"script_id": script["id"], "role": "hook", "start_second": 0, "end_second": 4, "spoken_text": "One"},
+        {"script_id": script["id"], "role": "body", "start_second": 3, "end_second": 6, "spoken_text": "Two"},
+    ]
+    assert client.put(f"/api/scripts/{script['id']}/segments", json=overlapping).status_code == 422
+    assert len(client.get(f"/api/scripts/{script['id']}/segments").json()) == 4
 
 
 def test_clone_duration_filters_and_video_upload(clean_database):
@@ -93,9 +169,12 @@ def test_clone_duration_filters_and_video_upload(clean_database):
     filtered = client.get("/api/assets", params={"duration_min": 4, "duration_max": 10}).json()
     assert [row["id"] for row in filtered] == [short["id"]]
     project = client.post("/api/mix-projects", json={"name": "Original", "target_duration": 10, **clean_database}).json()
-    client.put(f"/api/mix-projects/{project['id']}/timeline", json=[{"mix_project_id": project["id"], "asset_id": short["id"], "start_second": 0, "end_second": 5}])
+    client.put(f"/api/mix-projects/{project['id']}/timeline", json=[{"mix_project_id": project["id"], "asset_id": short["id"], "start_second": 0, "end_second": 5, "script_text_snapshot": "Snapshot copy", "source_start_second": 1, "source_end_second": 4}])
     clone = client.post(f"/api/mix-projects/{project['id']}/clone")
     assert clone.status_code == 201 and clone.json()["name"] == "Original - 副本" and len(clone.json()["timeline"]) == 1
+    assert clone.json()["timeline"][0]["script_text_snapshot"] == "Snapshot copy"
+    assert clone.json()["timeline"][0]["source_start_second"] == 1
+    assert clone.json()["timeline"][0]["source_end_second"] == 4
     video = client.post("/api/videos", json={"title": "Uploaded", "mix_project_id": clone.json()["id"]}).json()
     uploaded = client.post(f"/api/videos/{video['id']}/file", files={"file": ("result.webm", b"test-video", "video/webm")})
     assert uploaded.status_code == 200 and uploaded.json()["file_path"].endswith(".webm")
@@ -117,11 +196,34 @@ def test_mix_project_timeline_and_video_lineage(clean_database):
     assert client.put(f"/api/mix-projects/{project['id']}/timeline", json=[{**timeline[0], "end_second": 0}]).status_code == 422
     assert client.put(f"/api/mix-projects/{project['id']}/timeline", json=[{**timeline[0], "end_second": 21}]).status_code == 422
     assert client.put(f"/api/mix-projects/{project['id']}/timeline", json=[timeline[0], {**timeline[1], "start_second": 2}]).status_code == 422
+    assert client.put(f"/api/mix-projects/{project['id']}/timeline", json=[{**timeline[0], "script_segment_id": 9999}]).status_code == 404
+    assert client.put(f"/api/mix-projects/{project['id']}/timeline", json=[{**timeline[0], "source_start_second": 4, "source_end_second": 2}]).status_code == 422
     video = client.post("/api/videos", json={"title": "Sunscreen cut", "mix_project_id": project["id"], **common}).json()
     version = client.post(f"/api/videos/{video['id']}/versions", json={"change_note": "initial", "snapshot": {"project_id": project["id"]}}).json()
     assert version["version"] == 1 and version["is_latest"] is True
     assert client.get("/api/videos", params={"mix_project_id": project["id"]}).json()[0]["id"] == video["id"]
     assert client.get(f"/api/videos/{video['id']}/lineage").json()["mix_project"]["id"] == project["id"]
+
+
+def test_mix_project_delete_detaches_video_and_removes_generated_task(clean_database):
+    asset = client.post("/api/assets", json={"name": "Project clip", **clean_database}).json()
+    project = client.post("/api/mix-projects", json={"name": "Disposable project", **clean_database}).json()
+    client.post("/api/mix-project-assets", json={"mix_project_id": project["id"], "asset_id": asset["id"]})
+    video = client.post("/api/videos", json={"title": "Preserved video", "mix_project_id": project["id"]}).json()
+    client.get("/api/workbench/today", params={"task_date": "2026-09-25"})
+    assert any(
+        task["related_type"] == "mix_project" and task["related_id"] == project["id"]
+        for task in client.get("/api/workbench/tasks").json()
+    )
+
+    assert client.delete(f"/api/mix-projects/{project['id']}").status_code == 204
+    assert client.get(f"/api/mix-projects/{project['id']}").status_code == 404
+    assert client.get(f"/api/videos/{video['id']}").json()["mix_project_id"] is None
+    assert client.get("/api/mix-project-assets").json() == []
+    assert not any(
+        task["related_type"] == "mix_project" and task["related_id"] == project["id"]
+        for task in client.get("/api/workbench/tasks").json()
+    )
 
 
 def test_asset_delete_cascades_mix_relation(clean_database):
