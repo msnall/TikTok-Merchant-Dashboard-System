@@ -3,6 +3,7 @@ from app.db import Base
 from app import models
 from app import ad_models
 from app import work_models
+from app.ai import models as ai_models
 from app.config import settings
 target_metadata = Base.metadata
 config = context.config

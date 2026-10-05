@@ -1,5 +1,5 @@
-from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from datetime import date, datetime
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -41,6 +41,9 @@ class AdPlanSnapshot(Base):
     ad_plan_id: Mapped[int] = mapped_column(ForeignKey("ad_plans.id", ondelete="CASCADE"))
     import_batch_id: Mapped[int] = mapped_column(ForeignKey("ad_import_batches.id", ondelete="CASCADE"))
     snapshot_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    report_date: Mapped[date | None] = mapped_column(Date)
+    report_start_at: Mapped[datetime | None] = mapped_column(DateTime)
+    report_end_at: Mapped[datetime | None] = mapped_column(DateTime)
     spend: Mapped[float | None] = mapped_column(Float)
     orders: Mapped[int | None] = mapped_column(Integer)
     revenue: Mapped[float | None] = mapped_column(Float)

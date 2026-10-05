@@ -64,7 +64,7 @@ The V2 semantic index uses a deterministic local embedding fallback so it works 
 
 ## Database and migrations
 
-The local database is SQLite by default. PostgreSQL remains available through Docker Compose. The current Alembic head is `0007_product_code_mappings`.
+The local database is SQLite by default. PostgreSQL remains available through Docker Compose. The current Alembic head is `0010_ai_decision_foundation`.
 
 ```powershell
 cd backend
@@ -73,6 +73,10 @@ alembic current
 ```
 
 The standard seed creates baseline content data. For a full demonstration, add a small set of advertising plans, snapshots, operations, MixProjects and VideoWorks through the UI or API so both main business chains are visible.
+
+Phase 0 adds a deterministic decision foundation under `backend/app/ai/`: independent campaign video metrics, ROI policy labels, campaign time-series storage, and append-only analysis runs with input snapshots. It does not call an LLM, retrieve knowledge with RAG, or operate a TikTok account. The AI-layer empty-burn criterion (`USD spend > 3` and zero orders) is separate from the existing advertising page's six-state rule; the advertising page remains unchanged. The active rule and data contracts are in `docs/ai/AI运营决策知识库_V0.1.md`, `docs/ai/data_contract.md`, and `docs/ai/ai_decision_contract.md`.
+
+Before upgrading an existing local database, inspect its `alembic_version` and tables. A development database may contain empty, unversioned `campaign_video_metrics` / `campaign_metric_timeseries` tables left by earlier experiments. Migration `0010` stops instead of overwriting those tables. Back up and reconcile that database separately; the migration's upgrade/downgrade/upgrade test uses an isolated database.
 
 ## Tests
 

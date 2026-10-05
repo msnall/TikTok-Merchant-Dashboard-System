@@ -1,0 +1,62 @@
+[
+  {
+    "case_id": "CASE_001", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S001", "campaign_name": "A*9.10产品0.82", "currency": "USD", "spend": 3.1, "orders": 0, "revenue": 0, "current_roi": 0, "source_type": "synthetic_demo"},
+    "video": null,
+    "expected": {"decision": "EMPTY_BURN", "recommended_action": "CLOSE_REBUILD_KEEP_ROI"}
+  },
+  {
+    "case_id": "CASE_002", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S002", "campaign_name": "A*9.10产品0.82", "currency": "USD", "spend": 2.9, "orders": 0, "revenue": 0, "current_roi": 0, "source_type": "synthetic_demo"},
+    "video": null,
+    "expected": {"not_decision": "EMPTY_BURN", "order_status": "ZERO_ORDER"}
+  },
+  {
+    "case_id": "CASE_003", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S003", "campaign_name": "B*9.10产品1.02", "spend": 6, "orders": 3, "revenue": 4.26, "current_roi": 0.71, "source_type": "synthetic_demo"},
+    "video": {"video_id": "SV003", "campaign_id": "S003", "report_date": "2026-09-10", "ctr": 0.026, "cvr": 0.113, "official_completion_rate": 0.36, "source_field_name": "synthetic_fixed", "source_type": "synthetic_demo"},
+    "expected": {"decision": "CLOSE_REBUILD_LOWER_ROI", "order_status": "FEW_ORDERS", "roi_policy_change": {"from": "profit_5pct", "to": "break_even"}, "target_roi_value": null}
+  },
+  {
+    "case_id": "CASE_004", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S004", "campaign_name": "B*9.10产品1.02", "spend": 6, "orders": 5, "revenue": 9, "current_roi": 1.5, "source_type": "synthetic_demo"},
+    "video": {"video_id": "SV004", "campaign_id": "S004", "report_date": "2026-09-10", "ctr": 0.026, "cvr": 0.113, "official_completion_rate": 0.36, "source_field_name": "synthetic_fixed", "source_type": "synthetic_demo"},
+    "expected": {"decision": "CLOSE_REBUILD_RAISE_ROI", "roi_policy_change": {"from": "profit_5pct", "to": "profit_10pct"}, "target_roi_value": null}
+  },
+  {
+    "case_id": "CASE_005", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S005", "campaign_name": "A*9.10产品0.82", "spend": 6, "orders": 4, "revenue": 4.92, "current_roi": 0.82, "source_type": "synthetic_demo"},
+    "video": {"video_id": "SV005", "campaign_id": "S005", "report_date": "2026-09-10", "ctr": 0.026, "cvr": 0.113, "official_completion_rate": 0.36, "source_field_name": "synthetic_fixed", "source_type": "synthetic_demo"},
+    "expected": {"decision": "WAIT_OBSERVE", "roi_status": "NEAR_TARGET"}
+  },
+  {
+    "case_id": "CASE_006", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S006", "campaign_name": "A*9.10产品0.82", "spend": 6, "orders": 3, "revenue": 3, "current_roi": 0.5, "source_type": "synthetic_demo"},
+    "video": {"video_id": "SV006", "campaign_id": "S006", "report_date": "2026-09-10", "ctr": 0.011, "cvr": 0.08, "official_completion_rate": 0.24, "source_field_name": "synthetic_fixed", "source_type": "synthetic_demo"},
+    "expected": {"decision": "CLOSE_REBUILD", "video_status": "VIDEO_POOR", "target_roi_value": null}
+  },
+  {
+    "case_id": "CASE_007", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S007", "campaign_name": "A*9.10产品0.82", "spend": 6, "orders": 3, "revenue": 3, "current_roi": 0.5, "source_type": "synthetic_demo"},
+    "video": {"video_id": "SV007", "campaign_id": "S007", "report_date": "2026-09-10", "ctr": 0.026, "cvr": 0.113, "official_completion_rate": null, "source_type": "synthetic_demo"},
+    "expected": {"video_status": "UNKNOWN", "decision": "INSUFFICIENT_DATA"}
+  },
+  {
+    "case_id": "CASE_008", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S008", "campaign_name": "A*xxx0.82", "spend": 2, "orders": 2, "revenue": 2, "current_roi": 1, "source_type": "synthetic_demo"},
+    "video": null,
+    "expected": {"link_type": "A", "roi_policy": "break_even", "target_roi": 0.82}
+  },
+  {
+    "case_id": "CASE_009", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S009", "campaign_name": "B*xxx1.02", "spend": 2, "orders": 2, "revenue": 2, "current_roi": 1, "source_type": "synthetic_demo"},
+    "video": null,
+    "expected": {"link_type": "B", "roi_policy": "profit_5pct", "target_roi": 1.02}
+  },
+  {
+    "case_id": "CASE_010", "source_type": "synthetic_demo",
+    "campaign": {"campaign_id": "S010", "campaign_name": "A*9.10新品0.82", "spend": 9, "orders": 10, "revenue": 7.38, "current_roi": 0.82, "is_new_product": true, "spend_growth_confirmed": true, "orders_normal_confirmed": true, "source_type": "synthetic_demo"},
+    "video": {"video_id": "SV010", "campaign_id": "S010", "report_date": "2026-09-10", "ctr": 0.026, "cvr": 0.113, "official_completion_rate": 0.36, "source_field_name": "synthetic_fixed", "source_type": "synthetic_demo"},
+    "expected": {"decision": "SCALE_NEW_PRODUCT", "requires_human_confirmation": true}
+  }
+]

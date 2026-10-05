@@ -1,0 +1,22 @@
+[
+  {"id":"A001","text":"A计划，成本3.5刀，0订单。","spend":3.5,"orders":0,"decision":"EMPTY_BURN"},
+  {"id":"A002","text":"B计划，花了4美元，还没出单，0订单。","spend":4.0,"orders":0,"decision":"EMPTY_BURN"},
+  {"id":"A003","text":"A计划，成本2刀，0订单。","spend":2.0,"orders":0,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A004","text":"A计划，成本3刀，0订单。","spend":3.0,"orders":0,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A005","text":"A计划，成本5刀，1单。","spend":5.0,"orders":1,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A006","text":"B计划，成本8刀，3单，当前ROI 0.71，目标ROI 0.82。","spend":8.0,"orders":3,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A007","text":"A计划，成本8.6刀，3单，当前ROI 0.71，目标ROI 0.82，CTR 2.6%，CVR 11.3%，官方完播率36%。","spend":8.6,"orders":3,"decision":"NEEDS_CONFIRMATION"},
+  {"id":"A008","text":"B计划，成本8刀，4单，当前ROI 0.82，目标ROI 0.82，CTR 2.6%，CVR 11.3%，官方完播率36%。","spend":8.0,"orders":4,"decision":"WAIT_OBSERVE"},
+  {"id":"A009","text":"B计划，成本8刀，4单，当前ROI 0.95，目标ROI 0.82，CTR 2.6%，CVR 11.3%，官方完播率36%。","spend":8.0,"orders":4,"decision":"CLOSE_REBUILD_RAISE_ROI"},
+  {"id":"A010","text":"A计划，成本8刀，4单，当前ROI 0.95，目标ROI 0.82，CTR 2.6%，CVR 11.3%，官方完播率36%。","spend":8.0,"orders":4,"decision":"CLOSE_REBUILD_RAISE_ROI"},
+  {"id":"A011","text":"A计划，成本8刀，4单，当前ROI 0.71，目标ROI 0.82，CTR 1.2%，CVR 11.3%，官方完播率36%。","spend":8.0,"orders":4,"decision":"CLOSE_REBUILD"},
+  {"id":"A012","text":"A计划，成本8刀，4单，当前ROI 0.71，目标ROI 0.82，CTR 2.6%，CVR 9%，官方完播率36%。","spend":8.0,"orders":4,"decision":"CLOSE_REBUILD"},
+  {"id":"A013","text":"A计划，成本8刀，4单，当前ROI 0.71，目标ROI 0.82，CTR 2.6%，CVR 11.3%，官方完播率29%。","spend":8.0,"orders":4,"decision":"CLOSE_REBUILD"},
+  {"id":"A014","text":"A计划，成本8刀，4单，当前ROI 0.71，目标ROI 0.82，CTR 2.6%，CVR 11.3%。","spend":8.0,"orders":4,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A015","text":"A计划，成本8刀，4单，当前ROI 0.71，目标ROI 0.82，完播率36%。","spend":8.0,"orders":4,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A016","text":"前面花得很快，后面基本不花了。","spend":null,"orders":null,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A017","text":"这个计划现在没有给出成本和订单，只想看看历史变化。","spend":null,"orders":null,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A018","text":"A计划，成本4，0订单，币种未说明。","spend":4.0,"orders":0,"decision":"INSUFFICIENT_DATA"},
+  {"id":"A019","text":"B计划，成本8刀，10单，当前ROI 0.82，目标ROI 0.82，CTR 2.6%，CVR 11.3%，官方完播率36%。","spend":8.0,"orders":10,"decision":"WAIT_OBSERVE"},
+  {"id":"A020","text":"A计划，成本8刀，9单，当前ROI 0.82，目标ROI 0.82，CTR 2.6%，CVR 11.3%，官方完播率36%。","spend":8.0,"orders":9,"decision":"WAIT_OBSERVE"}
+]

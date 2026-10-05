@@ -1,7 +1,4 @@
-import os
 from types import SimpleNamespace
-
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
 import pytest
 from fastapi.testclient import TestClient

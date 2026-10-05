@@ -1,9 +1,14 @@
 __pycache__/
 .pytest-temp/
+.pytest_tmp/
+.pytest_cache_local/
+.pytest-*/
+.pytest_tmp*/
 *.py[cod]
 .venv/
 .env
 *.db
+backup/
 node_modules/
 dist/
 storage/assets/*

@@ -1,0 +1,45 @@
+[
+  {
+    "id": "CASE_001",
+    "campaign_id": "demo_phase25_case001",
+    "text": "A计划，已经花了3.5美元，一单没有。",
+    "expected_extract": {"link_type": "A", "spend": 3.5, "orders": 0},
+    "expected_decision": "EMPTY_BURN",
+    "expected_recommendation": "CLOSE_REBUILD_KEEP_ROI",
+    "expected_rules": ["EMPTY_BURN_USD_3"]
+  },
+  {
+    "id": "CASE_002",
+    "campaign_id": "demo_phase25_case002",
+    "text": "A*9.10测试产品0.82，成本8.6美元，3单，当前ROI0.71，目标ROI0.82，CTR2.6%，CVR11.3%，官方完播率36%。",
+    "expected_extract": {"campaign_name": "A*9.10测试产品0.82", "link_type": "A", "target_roi": 0.82, "spend": 8.6, "orders": 3, "current_roi": 0.71, "ctr": 2.6, "cvr": 11.3, "official_completion_rate": 36},
+    "expected_decision": "NEEDS_CONFIRMATION",
+    "expected_rules": ["R001", "R003", "R008"],
+    "expected_citations": ["R003", "R006"]
+  },
+  {
+    "id": "CASE_003",
+    "campaign_id": "demo_phase25_case003",
+    "text": "B*9.10测试产品1.02，成本9美元，5单，ROI1.3，目标1.02，CTR2.8%，CVR12%，完播率38%。",
+    "expected_extract": {"campaign_name": "B*9.10测试产品1.02", "link_type": "B", "target_roi": 1.02, "spend": 9, "orders": 5, "current_roi": 1.3, "ctr": 2.8, "cvr": 12, "official_completion_rate": 38},
+    "expected_decision": "CLOSE_REBUILD_RAISE_ROI",
+    "expected_rules": ["R001", "R004", "R008"]
+  },
+  {
+    "id": "CASE_004",
+    "campaign_id": "demo_phase25_case004",
+    "text": "这个A计划成本8.6美元，3单，ROI0.81，目标0.82，CTR2.5%，CVR11.5%，完播率35%，暂时没有明显消耗异常。",
+    "expected_extract": {"link_type": "A", "spend": 8.6, "orders": 3, "current_roi": 0.81, "target_roi": 0.82, "ctr": 2.5, "cvr": 11.5, "official_completion_rate": 35},
+    "expected_decision": "NEEDS_CONFIRMATION",
+    "expected_rules": ["R001", "R003", "R008"]
+  },
+  {
+    "id": "CASE_005",
+    "campaign_id": "demo_phase25_case005",
+    "texts": [
+      "A计划成本8.6美元，3单，ROI0.71，CTR2.6%，CVR11.3%，完播率36%。",
+      "A计划现在成本11.4美元，5单，ROI0.86，CTR2.8%，CVR12%，完播率37%。"
+    ],
+    "expected_delta": {"delta_spend": 2.8, "delta_orders": 2, "delta_roi": 0.15, "delta_ctr": 0.002, "delta_cvr": 0.007, "delta_completion_rate": 0.01}
+  }
+]

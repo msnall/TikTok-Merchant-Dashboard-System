@@ -20,6 +20,10 @@ from .ad_api import router as ad_router
 from .workbench_api import router as workbench_router
 from .work_api import router as work_task_router, legacy_router as legacy_work_task_router
 from .fill_assistant_api import router as fill_assistant_router
+from .ai.knowledge_api import router as knowledge_router
+from .ai.analysis_api import router as analysis_router
+from .ai.feedback_loop_api import router as feedback_loop_router
+from .ai.feedback_evaluation import router as feedback_evaluation_router
 import json
 import io
 import re
@@ -36,6 +40,10 @@ app.include_router(workbench_router)
 app.include_router(work_task_router)
 app.include_router(legacy_work_task_router)
 app.include_router(fill_assistant_router)
+app.include_router(knowledge_router)
+app.include_router(analysis_router)
+app.include_router(feedback_loop_router)
+app.include_router(feedback_evaluation_router)
 
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError):
