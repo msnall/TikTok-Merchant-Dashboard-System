@@ -22,7 +22,9 @@ def match_operator_strategies(analysis_result: dict) -> dict:
         add("S002", "候选：继续观察订单和ROI，检查转化链路")
     if diagnosis.get("roi_status") == "LOW" and diagnosis.get("video_quality") == "NORMAL":
         add("S003", "候选：检查商品页和CVR，人工确认后测试相邻ROI档位")
-    if diagnosis.get("roi_status") == "LOW" and diagnosis.get("video_quality") == "LOW":
+    if (diagnosis.get("roi_status") == "LOW" and diagnosis.get("video_quality") == "LOW") or (
+            diagnosis.get("video_quality") == "MISSING" and
+            (diagnosis.get("ctr_status") == "LOW" or diagnosis.get("completion_status") == "LOW")):
         add("S004", "候选：检查Hook和素材结构，测试新素材")
     if (current.get("is_new_product") is True and current.get("spend_growth_confirmed") is True
             and current.get("orders_normal_confirmed") is True

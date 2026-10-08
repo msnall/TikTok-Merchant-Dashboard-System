@@ -17,7 +17,7 @@
       <section class="judgment-section">
         <div class="section-kicker">01 / 当前判断</div>
         <div class="judgment-head">
-          <div><span class="campaign-tag">计划 {{ result.campaign_id || campaignId }}</span><h2>{{ decisionTitle(result.decision) }}</h2></div>
+          <div><span class="campaign-tag">计划 {{ result.campaign_id || campaignId }}</span><h2>{{ diagnosis.judgment_candidate || decisionTitle(result.decision) }}</h2></div>
           <span class="state-tag">{{ stateTitle(result.state) }}</span>
         </div>
         <p class="judgment-summary">{{ plainSummary }}</p>
@@ -96,7 +96,8 @@
             </div>
           </article>
         </div>
-        <div v-else class="legacy-note"><strong>此历史分析没有逐条建议记录</strong><span>无法确认当时运营针对哪条建议作出反馈，因此不提供补录入口。</span></div>
+        <div v-else-if="diagnosis.judgment_candidate" class="legacy-note"><strong>当前为待验证候选判断</strong><span>尚未生成可逐条反馈的策略建议；先按上方观察方向核对证据。</span></div>
+        <div v-else class="legacy-note"><strong>此分析没有逐条建议记录</strong><span>无法确认运营针对哪条建议作出反馈，因此不提供补录入口。</span></div>
         <p v-if="recommendationError" class="error-text">{{ recommendationError }}</p>
       </section>
 
@@ -142,6 +143,9 @@ const keyFacts = computed(() => {
   if (current.value.spend != null) facts.push(`已产生广告消耗：${spendDisplay.value}`)
   if (current.value.orders != null) facts.push(`当前订单：${current.value.orders} 单`)
   if (current.value.current_roi != null && current.value.target_roi != null) facts.push(`当前 ROI ${current.value.current_roi}，目标 ROI ${current.value.target_roi}`)
+  else if (current.value.current_roi != null) facts.push(`当前 ROI：${current.value.current_roi}（目标 ROI 未提供）`)
+  if (current.value.ctr != null) facts.push(`CTR：${current.value.ctr}%`)
+  if (current.value.official_completion_rate != null) facts.push(`完播率：${current.value.official_completion_rate}%`)
   if (result.value?.decision === 'EMPTY_BURN') facts.push('符合当前空烧判断条件')
   return facts
 })
@@ -159,6 +163,8 @@ const advice = computed(() => {
   const decision = result.value?.decision
   if (decision === 'EMPTY_BURN') return '核对订单与消耗口径，检查素材和商品页表现，再由运营人员评估是否关停重建。'
   if (decision === 'WAIT_OBSERVE') return '暂不调整计划，保留当前投放状态；下一轮比较消耗、订单和 ROI。'
+  if (decision === 'INSUFFICIENT_DATA' && diagnosis.value.judgment_candidate === '素材风险候选') return '先核对完整视频指标，测试新素材并对比 CTR 与完播率；尚不能判断 ROI 是否低于目标。'
+  if (decision === 'INSUFFICIENT_DATA' && diagnosis.value.judgment_candidate === '首日起量观察候选') return '继续观察订单和 ROI 的稳定性；确认新品及增长趋势后，由运营评估是否小步增加预算。'
   if (decision === 'INSUFFICIENT_DATA') return '先补充缺失的消耗、订单和视频指标，再决定是否调整计划。'
   if (decision === 'SCALE_NEW_PRODUCT') return '核对订单、视频与履约表现后，由运营人员评估是否小步探索预算。'
   if (decision === 'CLOSE_REBUILD' || String(decision).startsWith('CLOSE_REBUILD_')) return '核对视频、转化和 ROI 证据后，由运营人员评估是否重建计划。'

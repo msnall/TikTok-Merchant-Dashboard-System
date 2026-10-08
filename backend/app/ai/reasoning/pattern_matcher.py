@@ -25,6 +25,8 @@ def match_patterns(analysis_result: dict) -> list[dict]:
         add("P001", ["video_quality == NORMAL", "roi_status == LOW"])
     if diagnosis["video_quality"] == "LOW":
         add("P002", ["video_quality == LOW"], "HIGH")
+    elif diagnosis["video_quality"] == "MISSING" and (diagnosis["ctr_status"] == "LOW" or diagnosis["completion_status"] == "LOW"):
+        add("P002", ["partial video metric below normal threshold"], "LOW")
     if diagnosis["ctr_status"] == "LOW" and diagnosis["cvr_status"] == "NORMAL":
         add("P003", ["ctr_status == LOW", "cvr_status == NORMAL"])
     if diagnosis["ctr_status"] == "NORMAL" and diagnosis["cvr_status"] == "LOW":

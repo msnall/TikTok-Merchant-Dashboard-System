@@ -34,6 +34,13 @@ def _number(text: str, patterns: tuple[str, ...], integer=False):
             return int(value) if integer else value
     return None
 
+
+def _current_roi(text: str):
+    for match in re.finditer(r"(?:当前|现有)?\s*ROI\s*(?:是|为|[:：=])?\s*([0-9]+(?:\.[0-9]+)?)", text, re.I):
+        if not re.search(r"目标\s*$", text[:match.start()]):
+            return float(match.group(1))
+    return None
+
 def parse_operator_text(text: str, campaign_id: str | None = None) -> dict:
     if not isinstance(text, str) or not text.strip():
         raise ValueError("text 不能为空")
@@ -51,14 +58,14 @@ def parse_operator_text(text: str, campaign_id: str | None = None) -> dict:
             target = float(tail.group(1))
     result = AnalysisInput(
         campaign_id=campaign_id, campaign_name=campaign_name,
-        spend=_number(value, (r"(?:成本|消耗|花了|花费|spend)\s*(?:是|为|=)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", r"([0-9]+(?:\.[0-9]+)?)\s*(?:刀|美金|美元)")),
-        orders=_number(value, (r"(?:订单|订单数|出了|有)\s*(?:是|为|=)?\s*([0-9]+)", r"([0-9]+)\s*(?:单|订单)"), integer=True),
-        revenue=_number(value, (r"(?:收入|营收|revenue)\s*(?:是|为|=)?\s*([0-9]+(?:\.[0-9]+)?)",)),
-        current_roi=_number(value, (r"(?<!目标)(?:当前|现有)?\s*ROI\s*(?:是|为|=)?\s*([0-9]+(?:\.[0-9]+)?)",)),
+        spend=_number(value, (r"(?:成本|消耗|花了|花费|spend)\s*(?:是|为|[:：=])?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", r"([0-9]+(?:\.[0-9]+)?)\s*(?:刀|美金|美元)")),
+        orders=_number(value, (r"(?:订单|订单数|出了|有)\s*(?:是|为|[:：=])?\s*([0-9]+)", r"([0-9]+)\s*(?:单|订单)"), integer=True),
+        revenue=_number(value, (r"(?:收入|营收|revenue)\s*(?:是|为|[:：=])?\s*([0-9]+(?:\.[0-9]+)?)",)),
+        current_roi=_current_roi(value),
         target_roi=target,
-        ctr=_number(value, (r"CTR\s*(?:是|为|=)?\s*([0-9]+(?:\.[0-9]+)?)\s*%?",)),
-        cvr=_number(value, (r"CVR\s*(?:是|为|=)?\s*([0-9]+(?:\.[0-9]+)?)\s*%?",)),
-        official_completion_rate=_number(value, (r"(?:官方)?完播率\s*(?:是|为|=)?\s*([0-9]+(?:\.[0-9]+)?)\s*%?",)),
+        ctr=_number(value, (r"CTR\s*(?:是|为|[:：=])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?",)),
+        cvr=_number(value, (r"CVR\s*(?:是|为|[:：=])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?",)),
+        official_completion_rate=_number(value, (r"(?:官方)?完播率\s*(?:是|为|[:：=])?\s*([0-9]+(?:\.[0-9]+)?)\s*%?",)),
         spend_pattern="increase_then_flat" if re.search(r"(前面|开始).{0,12}(快|涨).{0,20}(后面|后来).{0,12}(平|不怎么花|不消耗|不动)", value) else None,
         report_time=report_time_match.group(1) if report_time_match else None,
         link_type=link_type,

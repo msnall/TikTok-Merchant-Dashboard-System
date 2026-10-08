@@ -70,7 +70,9 @@ def _grounded_number(text: str, key: str, value: int | float) -> bool:
     }[key]
     if key == "orders" and value == 0 and re.search(r"一单(?:都)?(?:没|没有)|没有订单|没出单|零单|0\s*单", text):
         return True
-    return bool(re.search(rf"(?:{labels}).{{0,12}}(?<!\d){number}(?![\d.])", text, re.I)
+    if key == "current_roi":
+        return parse_operator_text(text).get("current_roi") == value
+    return bool(re.search(rf"(?:{labels})[^\S\r\n]*(?:[:：=]|是|为)?\s*(?<!\d){number}(?![\d.])", text, re.I)
                 or key == "orders" and re.search(rf"(?<!\d){number}(?![\d.])\s*单", text))
 
 def analyze_text(db: Session, campaign_id: str, text: str) -> dict:
@@ -117,7 +119,7 @@ def analyze_text(db: Session, campaign_id: str, text: str) -> dict:
     for key in ("ctr", "cvr", "official_completion_rate"):
         if video[key] is not None:
             label = {"ctr": "CTR", "cvr": "CVR", "official_completion_rate": "完播率"}[key]
-            has_percent = bool(re.search(label + r"\s*(?:是|为|=)?\s*\d+(?:\.\d+)?\s*%", text, re.I))
+            has_percent = bool(re.search(label + r"\s*(?:是|为|[:：=])?\s*\d+(?:\.\d+)?\s*%", text, re.I))
             video[key] = video[key] / 100 if has_percent or video[key] > 1 else video[key]
     previous = db.scalars(select(AIAnalysisRun).where(AIAnalysisRun.campaign_id == campaign_id,
                                   AIAnalysisRun.source_type != "synthetic_demo").order_by(AIAnalysisRun.id.desc())).first()
@@ -173,6 +175,7 @@ def analyze_text(db: Session, campaign_id: str, text: str) -> dict:
         "WAIT_OBSERVE 需要下一轮比较当前指标和历史变化" if to_state == "WAIT_OBSERVE" else None)
     reasoning_input = {"current_analysis": parsed, "rule_result": result,
                        "decision": result["decision"], "state": to_state,
+                       "reported_first_day": bool(re.search(r"第一天|首日", text)),
                        "historical_delta": historical_delta,
                        "historical_comparison": result["historical_comparison"],
                        "confidence": confidence, "knowledge_refs": refs, "video": video}

@@ -42,12 +42,14 @@ def build_reasoning_result(analysis_result: dict) -> dict:
     if "P001" in ids:
         causes.append({"cause": "可能存在人群、商品页或目标ROI策略问题", "supporting_evidence": ["video_quality == NORMAL", "roi_status == LOW"], "missing_evidence": ["商品页转化数据", "人群数据"], "confidence": "LOW"})
     if "P002" in ids:
-        causes.append({"cause": "可能存在素材前几秒或卖点表达不足", "supporting_evidence": ["video_quality == LOW"], "missing_evidence": ["素材版本对比", "受众数据"], "confidence": "MEDIUM"})
+        partial = diagnosis["video_quality"] == "MISSING"
+        causes.append({"cause": "可能存在素材前几秒或卖点表达不足", "supporting_evidence": ["partial video metric below normal threshold" if partial else "video_quality == LOW"], "missing_evidence": ["完整视频指标", "素材版本对比", "受众数据"] if partial else ["素材版本对比", "受众数据"], "confidence": "LOW" if partial else "MEDIUM"})
     if "P004" in ids:
         causes.append({"cause": "可能存在商品页承接或价格转化不足", "supporting_evidence": ["ctr_status == NORMAL", "cvr_status == LOW"], "missing_evidence": ["商品页漏斗", "价格信息"], "confidence": "LOW"})
-    if "P009" in ids:
+    if "P009" in ids and (facts.get("spend") is None or facts.get("orders") is None):
         causes.append({"cause": "可能只是当前数据不足以支持完整诊断", "supporting_evidence": ["required evidence missing"], "missing_evidence": ["缺失字段"], "confidence": "HIGH"})
     return {"campaign_stage": stage, "fact_summary": facts, "metric_diagnosis": diagnosis,
+            "reported_first_day": analysis_result.get("reported_first_day", False),
             "possible_causes": causes, "candidate_strategies": strategies,
             "observation_plan": plan, "pattern_refs": patterns,
             "knowledge_refs": knowledge_refs}

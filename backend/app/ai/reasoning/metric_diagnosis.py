@@ -56,6 +56,7 @@ def build_metric_diagnosis(analysis_result: dict, facts: dict | None = None) -> 
         "roi_status": _roi_status(rule, facts) if facts.get("target_roi") is not None else "MISSING",
         "ctr_status": _threshold_status(facts.get("ctr"), 0.02, 0.04),
         "cvr_status": _threshold_status(facts.get("cvr"), 0.10, 0.20),
+        "completion_status": _threshold_status(facts.get("completion_rate"), 0.30, 0.50),
         "spend_status": spend_status,
         "historical_status": historical,
     }

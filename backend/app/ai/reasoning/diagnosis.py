@@ -31,6 +31,7 @@ def build_diagnosis_result(reasoning_result: dict, rule_result: dict) -> dict:
                            "supporting_evidence": support, "missing_evidence": missing})
 
     summary = "当前证据不足，无法定位主要问题。"
+    candidate = None
     steps = []
     limitations = []
     if decision == "EMPTY_BURN":
@@ -54,6 +55,24 @@ def build_diagnosis_result(reasoning_result: dict, rule_result: dict) -> dict:
         add("流量质量不匹配", support, ["CPC", "受众数据", "CTR 趋势"])
         add("目标 ROI 策略与当前投放表现不匹配", support, ["利润依据", "可比 ROI 档位结果"])
         steps = ["检查商品页转化和 CVR 趋势", "核对流量来源与 CPC", "核对目标 ROI 策略依据"]
+    elif (decision == "INSUFFICIENT_DATA" and reasoning_result.get("reported_first_day")
+          and _present(facts.get("spend")) and (facts.get("orders") or 0) > 0
+          and _present(facts.get("current_roi"))):
+        candidate = "首日起量观察候选"
+        summary = "首日已有消耗和订单，当前 ROI 已记录；缺少目标 ROI、新品确认和连续趋势，不能判断已经进入扩量。"
+        steps = ["核对是否为新品和目标 ROI", "继续观察订单、ROI 与消耗的稳定性"]
+    elif (decision == "INSUFFICIENT_DATA" and (metrics.get("ctr_status") == "LOW"
+          or metrics.get("completion_status") == "LOW")
+          and _present(facts.get("spend")) and _present(facts.get("orders"))):
+        candidate = "素材风险候选"
+        summary = "已有素材指标低于当前业务正常标准，素材表现可能不足；缺少完整视频指标和目标 ROI，不能确认 ROI 低于目标。"
+        support = []
+        if metrics.get("ctr_status") == "LOW" and _present(facts.get("ctr")):
+            support.append(f"CTR {facts['ctr'] * 100:g}%")
+        if metrics.get("completion_status") == "LOW" and _present(facts.get("completion_rate")):
+            support.append(f"完播率 {facts['completion_rate'] * 100:g}%")
+        add("素材吸引力不足", support, ["完整视频指标", "素材版本对比"])
+        steps = ["核对完整视频指标", "对比新素材的 CTR 与完播率"]
     elif metrics.get("ctr_status") == "LOW" and _present(facts.get("ctr")):
         summary = "当前 CTR 低于业务正常标准，点击意愿可能不足。"
         add("素材吸引力不足", [f"CTR {facts['ctr'] * 100:g}%"], ["CTR 趋势", "素材版本对比"])
@@ -84,5 +103,6 @@ def build_diagnosis_result(reasoning_result: dict, rule_result: dict) -> dict:
     if not steps:
         steps = ["补充消耗、订单、ROI 与视频指标后再比较"]
     return {"confirmed_facts": confirmed, "problem_summary": summary,
+            "judgment_candidate": candidate,
             "failure_hypotheses": hypotheses, "diagnostic_limitations": limitations,
             "next_validation_steps": steps}
